@@ -25,7 +25,15 @@ from mcts_qcm.visualize import print_summary, write_json, to_markdown, generate_
 
 app = typer.Typer(
     add_completion=False,
-    help="MCTS reasoning engine with LLM-driven QCM auditing (AlphaGo-style).",
+    rich_markup_mode="rich",
+    help=(
+        "AlphaGo-style tree search where an LLM generates ideas and a 4-question "
+        "QCM audit replaces the neural value head.\n\n"
+        "[bold]Quick start[/bold]\n\n"
+        "  [cyan]mcts run[/cyan] [green]\"Your problem\"[/green] --out tree.json\n\n"
+        "  [cyan]mcts visualize[/cyan] tree.json\n\n"
+        "Run any sub-command with [bold]--help[/bold] for full flag details."
+    ),
 )
 console = Console()
 
@@ -44,34 +52,96 @@ def _setup_logging(verbose: bool) -> None:
 
 @app.command()
 def run(
-    problem: str = typer.Argument(..., help="The problem to reason about."),
-    iters: int = typer.Option(20, "--iters", "-n", help="Number of MCTS iterations."),
-    k: int = typer.Option(4, "--k", "-k", help="Children per expansion."),
-    c: float = typer.Option(1.41, "--c", help="UCB1 exploration constant."),
-    max_depth: int = typer.Option(4, "--max-depth", help="Maximum tree depth."),
-    max_nodes: int = typer.Option(200, "--max-nodes", help="Hard cap on total nodes."),
+    problem: str = typer.Argument(..., help="The problem statement to reason about."),
+    iters: int = typer.Option(
+        20, "--iters", "-n",
+        help="MCTS iterations to run. More iterations = wider and deeper tree. 20–40 is a good starting range.",
+    ),
+    k: int = typer.Option(
+        4, "--k", "-k",
+        help="Child ideas generated per expansion. Higher values explore more breadth per step.",
+    ),
+    c: float = typer.Option(
+        1.41, "--c",
+        help="UCB1 exploration constant. Higher values favour less-visited nodes; lower values exploit high-scoring ones.",
+    ),
+    max_depth: int = typer.Option(
+        4, "--max-depth",
+        help="Hard cap on tree depth. Nodes at this depth are never expanded further.",
+    ),
+    max_nodes: int = typer.Option(
+        200, "--max-nodes",
+        help="Hard cap on total node count. Acts as a safety guard against runaway expansion.",
+    ),
     model_gen: str = typer.Option(
-        DEFAULT_GEMINI_FLASH, "--model-gen", help="LiteLLM model for the Idea Generator."
+        DEFAULT_GEMINI_FLASH, "--model-gen",
+        help=(
+            "LiteLLM model string for the Idea Generator. "
+            "Use the provider prefix, e.g. openai/gpt-4o-mini, anthropic/claude-3-5-sonnet-latest, "
+            "groq/llama-3.1-70b-versatile, ollama/llama3."
+        ),
     ),
     model_audit: str = typer.Option(
-        DEFAULT_GEMINI_FLASH, "--model-audit", help="LiteLLM model for the QCM Auditor."
+        DEFAULT_GEMINI_FLASH, "--model-audit",
+        help=(
+            "LiteLLM model string for the QCM Auditor. "
+            "Can differ from --model-gen; a cheaper/faster model often works well here."
+        ),
     ),
-    temperature_gen: float = typer.Option(0.9, "--temp-gen", help="Generator temperature."),
-    temperature_audit: float = typer.Option(0.1, "--temp-audit", help="Auditor temperature."),
-    out: Path = typer.Option(Path("tree.json"), "--out", "-o", help="Where to write the tree dump."),
+    temperature_gen: float = typer.Option(
+        0.9, "--temp-gen",
+        help="Sampling temperature for the Idea Generator. Higher = more creative/diverse ideas.",
+    ),
+    temperature_audit: float = typer.Option(
+        0.1, "--temp-audit",
+        help="Sampling temperature for the QCM Auditor. Keep low for consistent, deterministic scoring.",
+    ),
+    out: Path = typer.Option(
+        Path("tree.json"), "--out", "-o",
+        help="Path to write the JSON tree dump. Pass this file to 'mcts visualize' afterwards.",
+    ),
     md_out: Path | None = typer.Option(
-        None, "--md-out", help="Optional Markdown export of the tree."
+        None, "--md-out",
+        help="If set, also write a Markdown export of the full tree to this path.",
     ),
-    seed: int | None = typer.Option(None, "--seed", help="LLM seed for reproducibility."),
+    seed: int | None = typer.Option(
+        None, "--seed",
+        help="Integer seed forwarded to the LLM API for reproducible runs (not all providers honour it).",
+    ),
     no_prune_resource: bool = typer.Option(
-        False, "--no-prune-resource", help="Disable auto-pruning on failed Resource check."
+        False, "--no-prune-resource",
+        help="Disable auto-pruning of nodes that fail the Resource check. By default such nodes are marked dead.",
     ),
     prune_novelty: bool = typer.Option(
-        False, "--prune-novelty", help="Also auto-prune on failed Novelty check."
+        False, "--prune-novelty",
+        help="Also prune nodes that fail the Novelty check (off by default — novelty failures are informational).",
     ),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable DEBUG logging."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable DEBUG-level logging."),
 ) -> None:
-    """Run the MCTS QCM engine on PROBLEM."""
+    """Run the MCTS QCM engine on [bold]PROBLEM[/bold] and write the search tree to a JSON file.
+
+    [bold]Basic usage[/bold]
+
+      mcts run "Design a low-cost desalination process for off-grid villages"
+
+    [bold]More iterations, custom output, then visualize[/bold]
+
+      mcts run "Your problem" --iters 40 --k 4 --out tree.json
+
+      mcts visualize tree.json
+
+    [bold]Use a different model provider[/bold]
+
+      mcts run "Your problem" --model-gen openai/gpt-4o-mini --model-audit openai/gpt-4o-mini
+
+    [bold]Keep a fast auditor, use a stronger generator[/bold]
+
+      mcts run "Your problem" --model-gen anthropic/claude-3-5-sonnet-latest
+
+    [dim]Supported providers (via LiteLLM): Google (gemini/...), OpenAI (openai/...),
+    Anthropic (anthropic/...), Groq (groq/...), Ollama (ollama/...).
+    Set the matching API key in .env before running.[/dim]
+    """
     load_dotenv(override=False)
     _setup_logging(verbose)
 
@@ -133,42 +203,52 @@ def run(
 def visualize(
     json_path: Path = typer.Argument(
         Path("tree.json"),
-        help="Path to a tree.json produced by `mcts run`.",
+        help="Path to a tree.json produced by 'mcts run'.",
     ),
     html_out: Path | None = typer.Option(
         None,
         "--html-out",
         "-o",
         help=(
-            "Where to write the self-contained HTML explorer. "
-            "Defaults to <stem>-explorer.html next to the input file."
+            "Path for the self-contained HTML explorer. "
+            "Defaults to <stem>-explorer.html in the same directory as the input file."
         ),
     ),
     no_open: bool = typer.Option(
         False,
         "--no-open",
-        help="Do not automatically open the HTML file in the browser.",
+        help="Write the HTML file but do not open it in the browser automatically.",
     ),
     canvas_out: Path | None = typer.Option(
         None,
         "--canvas-out",
         "-c",
         help=(
-            "Where to write the .canvas.tsx file. "
+            "Path for the Cursor .canvas.tsx file (best-effort; requires a supported Cursor build). "
             "Defaults to the Cursor-managed canvases directory for this workspace."
         ),
     ),
 ) -> None:
-    """Generate an interactive HTML tree explorer from a tree.json file.
+    """Generate an interactive tree explorer from a [bold]tree.json[/bold] file.
 
-    Run this after `mcts run` to get an interactive DAG tree visualization with
-    a click-to-inspect detail panel that opens in your browser.
+    [bold]Basic usage[/bold]
 
-    Example workflow:
+      mcts visualize tree.json
 
-        mcts run "Your problem" --out tree.json
+    Opens a self-contained HTML file in your default browser — scrollable DAG,
+    colour-coded audit badges, click-to-inspect detail panel. Re-run after every
+    'mcts run' to refresh the view with fresh data.
 
-        mcts visualize tree.json
+    [bold]Generate without opening the browser[/bold]
+
+      mcts visualize tree.json --no-open
+
+    [bold]Custom output path[/bold]
+
+      mcts visualize tree.json --html-out reports/my-run.html
+
+    [dim]The HTML file has zero dependencies — no server, no network calls.
+    Open it in any browser at any time.[/dim]
     """
     json_path = Path(json_path)
     if not json_path.exists():
@@ -209,7 +289,7 @@ def visualize(
 
 @app.command()
 def version() -> None:
-    """Print the package version."""
+    """Print the installed package version."""
     from mcts_qcm import __version__
 
     console.print(__version__)

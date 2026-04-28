@@ -5,7 +5,7 @@ neural value network used in AlphaGo-style tree search.
 """
 
 from mcts_qcm.auditor import QCMAuditor, QCMResult
-from mcts_qcm.config import MCTSConfig
+from mcts_qcm.config import DEFAULT_GEMINI_FLASH, MCTSConfig
 from mcts_qcm.generator import IdeaGenerator
 from mcts_qcm.node import Node
 from mcts_qcm.search import MCTS
@@ -13,6 +13,7 @@ from mcts_qcm.search import MCTS
 __all__ = [
     "MCTS",
     "MCTSConfig",
+    "DEFAULT_GEMINI_FLASH",
     "Node",
     "IdeaGenerator",
     "QCMAuditor",

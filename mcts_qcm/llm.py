@@ -3,7 +3,7 @@
 The wrapper exposes a single ``LLMClient.chat_json`` method that returns a parsed
 Python ``dict`` (or raises ``LLMError``). It handles:
 
-- LiteLLM's multi-provider model strings (``openai/gpt-4o-mini``, ``anthropic/...``).
+- LiteLLM's multi-provider model strings (``openai/gpt-4o-mini``, ``gemini/gemini-2.5-flash``, ``anthropic/...``).
 - ``response_format={"type": "json_object"}`` when supported.
 - Stripping accidental markdown code fences from the model's reply.
 - One automatic "fix your JSON" follow-up before giving up.
@@ -93,6 +93,18 @@ def _extract_first_json_object(text: str) -> str:
     return text[start:]
 
 
+def _lite_llm_gemini_extra_kwargs(model: str) -> dict[str, Any]:
+    """Gemini 2.5+ can reserve output budget for hidden \"thinking\"; cap it off for JSON.
+
+    Without this, small ``max_tokens`` completions may return truncated JSON when the
+    model spends the budget internally. LiteLLM maps ``reasoning_effort`` accordingly.
+    See: Gemini provider docs on LiteLLM.
+    """
+    if model.startswith("gemini/"):
+        return {"reasoning_effort": "none"}
+    return {}
+
+
 def parse_json_lenient(content: str) -> dict[str, Any]:
     """Parse LLM-emitted JSON tolerating fences, prose, and stray markdown.
 
@@ -150,6 +162,7 @@ class LiteLLMClient:
                 # response_format is silently ignored by providers that don't
                 # support it; LiteLLM normalizes the JSON-mode flag.
                 kwargs["response_format"] = {"type": "json_object"}
+                kwargs.update(_lite_llm_gemini_extra_kwargs(model))
                 resp = litellm.completion(**kwargs)
                 content = resp["choices"][0]["message"]["content"]
                 last_content = content

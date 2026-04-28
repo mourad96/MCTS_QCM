@@ -51,3 +51,10 @@ def test_parse_json_lenient_with_prose() -> None:
 def test_parse_json_lenient_raises_on_garbage() -> None:
     with pytest.raises(json.JSONDecodeError):
         parse_json_lenient("definitely not json at all")
+
+
+def test_lite_llm_gemini_extra_kwargs_turns_off_thinking() -> None:
+    from mcts_qcm.llm import _lite_llm_gemini_extra_kwargs
+
+    assert _lite_llm_gemini_extra_kwargs("gemini/gemini-2.5-flash") == {"reasoning_effort": "none"}
+    assert _lite_llm_gemini_extra_kwargs("openai/gpt-4o-mini") == {}

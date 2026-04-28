@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Stable Google Gemini 2.5 Flash ID on the Gemini API via LiteLLM (prefix `gemini/`).
+DEFAULT_GEMINI_FLASH = "gemini/gemini-2.5-flash"
+
 
 @dataclass
 class MCTSConfig:
@@ -34,8 +37,8 @@ class MCTSConfig:
         seed: Optional seed forwarded to LiteLLM for reproducibility.
     """
 
-    model_gen: str = "openai/gpt-4o-mini"
-    model_audit: str = "openai/gpt-4o-mini"
+    model_gen: str = DEFAULT_GEMINI_FLASH
+    model_audit: str = DEFAULT_GEMINI_FLASH
 
     k_children: int = 4
     c_explore: float = 1.41

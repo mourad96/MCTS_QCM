@@ -20,18 +20,25 @@ cp .env.example .env  # fill in at least one provider key
 
 ## Run
 
+The CLI defaults both generator and auditor to **Gemini 2.5 Flash** (`gemini/gemini-2.5-flash`). Set `GEMINI_API_KEY` in `.env`, then:
+
 ```bash
 mcts run "Design a low-cost desalination process for off-grid villages" \
     --iters 20 --k 4 \
-    --model-gen openai/gpt-4o-mini \
-    --model-audit openai/gpt-4o-mini \
     --out tree.json
+```
+
+To use OpenAI instead, pass explicit models:
+
+```bash
+mcts run "Your problem" --model-gen openai/gpt-4o-mini --model-audit openai/gpt-4o-mini
 ```
 
 LiteLLM auto-detects providers via the model prefix:
 
 | Provider  | Example model string                       |
 | --------- | ------------------------------------------ |
+| Google    | **`gemini/gemini-2.5-flash`** (default), `gemini/gemini-flash-latest` |
 | OpenAI    | `openai/gpt-4o-mini`, `openai/gpt-4o`      |
 | Anthropic | `anthropic/claude-3-5-sonnet-latest`       |
 | Groq      | `groq/llama-3.1-70b-versatile`             |
@@ -66,8 +73,8 @@ After all iterations, the engine prints the **greedy best path** plus the full t
 | `--c`            | `1.41`                   | UCB1 exploration constant.                   |
 | `--max-depth`    | `4`                      | Max tree depth.                              |
 | `--max-nodes`    | `200`                    | Hard cap on total nodes.                     |
-| `--model-gen`    | `openai/gpt-4o-mini`     | Model for the Idea Generator.                |
-| `--model-audit`  | `openai/gpt-4o-mini`     | Model for the QCM Auditor.                   |
+| `--model-gen`    | `gemini/gemini-2.5-flash` | Model for the Idea Generator (Gemini Flash). |
+| `--model-audit`  | `gemini/gemini-2.5-flash` | Model for the QCM Auditor (Gemini Flash).    |
 | `--out`          | `tree.json`              | Where to write the tree dump.                |
 
 ## Tests

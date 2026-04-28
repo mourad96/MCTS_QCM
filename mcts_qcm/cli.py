@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 
-from mcts_qcm.config import MCTSConfig
+from mcts_qcm.config import DEFAULT_GEMINI_FLASH, MCTSConfig
 from mcts_qcm.search import IterationResult, MCTS
 from mcts_qcm.node import Node
 from mcts_qcm.visualize import print_summary, write_json, to_markdown
@@ -49,10 +49,10 @@ def run(
     max_depth: int = typer.Option(4, "--max-depth", help="Maximum tree depth."),
     max_nodes: int = typer.Option(200, "--max-nodes", help="Hard cap on total nodes."),
     model_gen: str = typer.Option(
-        "openai/gpt-4o-mini", "--model-gen", help="LiteLLM model for the Idea Generator."
+        DEFAULT_GEMINI_FLASH, "--model-gen", help="LiteLLM model for the Idea Generator."
     ),
     model_audit: str = typer.Option(
-        "openai/gpt-4o-mini", "--model-audit", help="LiteLLM model for the QCM Auditor."
+        DEFAULT_GEMINI_FLASH, "--model-audit", help="LiteLLM model for the QCM Auditor."
     ),
     temperature_gen: float = typer.Option(0.9, "--temp-gen", help="Generator temperature."),
     temperature_audit: float = typer.Option(0.1, "--temp-audit", help="Auditor temperature."),

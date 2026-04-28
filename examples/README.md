@@ -7,20 +7,27 @@ copy the prompt, and run:
 mcts run "$(cat examples/desalination.txt)" --iters 15 --k 3 --max-depth 3
 ```
 
-Or paste the problem directly:
+(Default models are **Gemini 2.5 Flash** via `gemini/gemini-2.5-flash`; ensure `GEMINI_API_KEY`
+is set in `.env`.)
 
 ```bash
 mcts run "Design a low-cost desalination process for off-grid villages" \
     --iters 15 --k 3 --max-depth 3 \
-    --model-gen openai/gpt-4o-mini \
-    --model-audit openai/gpt-4o-mini \
     --md-out runs/desalination.md \
     --out runs/desalination.json
+```
+
+Explicit OpenAI fallback example:
+
+```bash
+mcts run "Your problem here" \
+    --model-gen openai/gpt-4o-mini --model-audit openai/gpt-4o-mini \
+    --md-out runs/out.md --out runs/out.json
 ```
 
 ## Tuning suggestions
 
 - **Cheap exploration**: `--iters 10 --k 3 --max-depth 3` (~30–40 LLM calls).
 - **Wider search**: `--iters 30 --k 5 --max-depth 4` (~150+ LLM calls).
-- Use a stronger model for `--model-gen` and a cheaper one for `--model-audit`
-  to control cost without losing audit signal.
+- `--model-gen` can use a heavier model (`openai/gpt-4o`, `gemini/gemini-2.5-pro`) and
+  `--model-audit` stay on Flash or `openai/gpt-4o-mini` to separate cost tiers.

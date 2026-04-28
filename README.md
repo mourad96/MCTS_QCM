@@ -44,6 +44,17 @@ LiteLLM auto-detects providers via the model prefix:
 | Groq      | `groq/llama-3.1-70b-versatile`             |
 | Ollama    | `ollama/llama3`, `ollama/qwen2.5:14b`      |
 
+## CLI help
+
+Built-in help includes copy-paste examples, shorthand flags, and long descriptions for every option:
+
+```bash
+mcts --help
+mcts run --help
+mcts visualize --help
+mcts version --help
+```
+
 ## How it works
 
 ```
@@ -78,35 +89,49 @@ The HTML file is fully self-contained (no server, no dependencies). Re-run it af
 - Click any node to see its full idea text, QCM audit breakdown, and stats
 
 ```bash
-mcts visualize tree.json --no-open          # generate but don't open browser
-mcts visualize tree.json --html-out out.html  # custom output path
+mcts visualize tree.json --no-open
+mcts visualize tree.json --html-out out.html   # or: -o out.html
 ```
+
+The command also writes a **Cursor Canvas** `.canvas.tsx` under the IDE-managed canvases folder for the current working directory when generation succeeds (live preview requires a Cursor build with Canvas support). Override with `--canvas-out` / `-c`.
 
 ## CLI flags
 
+Summary below; for full detail see `mcts run --help` and `mcts visualize --help`.
+
 ### `mcts run`
 
-| Flag                  | Default                   | Description                                  |
-| --------------------- | ------------------------- | -------------------------------------------- |
-| `--iters`             | `20`                      | Number of MCTS iterations.                   |
-| `--k`                 | `4`                       | Children per expansion.                      |
-| `--c`                 | `1.41`                    | UCB1 exploration constant.                   |
-| `--max-depth`         | `4`                       | Max tree depth.                              |
-| `--max-nodes`         | `200`                     | Hard cap on total nodes.                     |
-| `--model-gen`         | `gemini/gemini-2.5-flash` | Model for the Idea Generator.                |
-| `--model-audit`       | `gemini/gemini-2.5-flash` | Model for the QCM Auditor.                   |
-| `--out`               | `tree.json`               | Where to write the tree dump.                |
-| `--md-out`            | —                         | Optional Markdown export of the tree.        |
-| `--no-prune-resource` | off                       | Disable auto-pruning on failed Resource.     |
-| `--prune-novelty`     | off                       | Also prune on failed Novelty.                |
+| Flag                  | Shorthand | Default                   | Description |
+| --------------------- | --------- | ------------------------- | ----------- |
+| `PROBLEM`             | —         | —                         | Problem statement (required positional argument). |
+| `--iters`             | `-n`      | `20`                      | MCTS iterations. |
+| `--k`                 | `-k`      | `4`                       | Child ideas per expansion. |
+| `--c`                 | —         | `1.41`                    | UCB1 exploration constant. |
+| `--max-depth`         | —         | `4`                       | Maximum tree depth. |
+| `--max-nodes`         | —         | `200`                     | Maximum total nodes. |
+| `--model-gen`         | —         | `gemini/gemini-2.5-flash` | LiteLLM model for the Idea Generator. |
+| `--model-audit`       | —         | `gemini/gemini-2.5-flash` | LiteLLM model for the QCM Auditor. |
+| `--temp-gen`          | —         | `0.9`                     | Generator sampling temperature. |
+| `--temp-audit`        | —         | `0.1`                     | Auditor sampling temperature. |
+| `--out`               | `-o`      | `tree.json`               | JSON tree output path. |
+| `--md-out`            | —         | —                         | Optional Markdown export path. |
+| `--seed`              | —         | —                         | Optional LLM seed (provider-dependent). |
+| `--no-prune-resource` | —         | off                       | Do not auto-prune on failed Resource check. |
+| `--prune-novelty`     | —         | off                       | Also prune on failed Novelty check. |
+| `--verbose`           | `-v`      | off                       | DEBUG logging. |
 
 ### `mcts visualize`
 
-| Flag           | Default                                | Description                             |
-| -------------- | -------------------------------------- | --------------------------------------- |
-| `--html-out`   | `<stem>-explorer.html` next to input   | Path for the self-contained HTML file.  |
-| `--no-open`    | off                                    | Skip auto-opening the browser.          |
-| `--canvas-out` | Cursor canvases dir                    | Path for the `.canvas.tsx` (best-effort). |
+| Flag           | Shorthand | Default                              | Description |
+| -------------- | --------- | ------------------------------------ | ----------- |
+| `JSON_PATH`    | —         | `tree.json`                          | Input tree from `mcts run`. |
+| `--html-out`   | `-o`      | `<stem>-explorer.html` beside input  | Self-contained HTML explorer path. |
+| `--no-open`    | —         | off                                  | Write HTML only; do not open a browser tab. |
+| `--canvas-out` | `-c`      | Cursor `canvases/` for cwd           | Optional `.canvas.tsx` path (best-effort). |
+
+### `mcts version`
+
+Prints the installed package version.
 
 ## Tests
 
@@ -129,7 +154,7 @@ mcts_qcm/
   auditor.py      QCMAuditor with pydantic-validated output
   search.py       MCTS orchestrator (select / expand / evaluate / backprop)
   visualize.py    Rich tree print + JSON / Markdown / HTML export
-  cli.py          Typer entrypoint (mcts run ...)
+  cli.py          Typer entrypoint (`mcts`, `mcts run`, `mcts visualize`, …)
 tests/            Pytest suite
 examples/         Sample problems
 ```

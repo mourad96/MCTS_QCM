@@ -64,18 +64,49 @@ Each iteration:
 
 After all iterations, the engine prints the **greedy best path** plus the full tree, and writes a JSON dump of the tree.
 
+## Visualize
+
+After a run, generate an interactive tree explorer and open it in your browser:
+
+```bash
+mcts visualize tree.json
+```
+
+The HTML file is fully self-contained (no server, no dependencies). Re-run it after every `mcts run` to refresh the view. The explorer shows:
+
+- Scrollable DAG with nodes coloured by audit result and best path highlighted
+- Click any node to see its full idea text, QCM audit breakdown, and stats
+
+```bash
+mcts visualize tree.json --no-open          # generate but don't open browser
+mcts visualize tree.json --html-out out.html  # custom output path
+```
+
 ## CLI flags
 
-| Flag             | Default                  | Description                                  |
-| ---------------- | ------------------------ | -------------------------------------------- |
-| `--iters`        | `20`                     | Number of MCTS iterations.                   |
-| `--k`            | `4`                      | Children per expansion.                      |
-| `--c`            | `1.41`                   | UCB1 exploration constant.                   |
-| `--max-depth`    | `4`                      | Max tree depth.                              |
-| `--max-nodes`    | `200`                    | Hard cap on total nodes.                     |
-| `--model-gen`    | `gemini/gemini-2.5-flash` | Model for the Idea Generator (Gemini Flash). |
-| `--model-audit`  | `gemini/gemini-2.5-flash` | Model for the QCM Auditor (Gemini Flash).    |
-| `--out`          | `tree.json`              | Where to write the tree dump.                |
+### `mcts run`
+
+| Flag                  | Default                   | Description                                  |
+| --------------------- | ------------------------- | -------------------------------------------- |
+| `--iters`             | `20`                      | Number of MCTS iterations.                   |
+| `--k`                 | `4`                       | Children per expansion.                      |
+| `--c`                 | `1.41`                    | UCB1 exploration constant.                   |
+| `--max-depth`         | `4`                       | Max tree depth.                              |
+| `--max-nodes`         | `200`                     | Hard cap on total nodes.                     |
+| `--model-gen`         | `gemini/gemini-2.5-flash` | Model for the Idea Generator.                |
+| `--model-audit`       | `gemini/gemini-2.5-flash` | Model for the QCM Auditor.                   |
+| `--out`               | `tree.json`               | Where to write the tree dump.                |
+| `--md-out`            | —                         | Optional Markdown export of the tree.        |
+| `--no-prune-resource` | off                       | Disable auto-pruning on failed Resource.     |
+| `--prune-novelty`     | off                       | Also prune on failed Novelty.                |
+
+### `mcts visualize`
+
+| Flag           | Default                                | Description                             |
+| -------------- | -------------------------------------- | --------------------------------------- |
+| `--html-out`   | `<stem>-explorer.html` next to input   | Path for the self-contained HTML file.  |
+| `--no-open`    | off                                    | Skip auto-opening the browser.          |
+| `--canvas-out` | Cursor canvases dir                    | Path for the `.canvas.tsx` (best-effort). |
 
 ## Tests
 
@@ -97,7 +128,7 @@ mcts_qcm/
   generator.py    IdeaGenerator
   auditor.py      QCMAuditor with pydantic-validated output
   search.py       MCTS orchestrator (select / expand / evaluate / backprop)
-  visualize.py    Rich tree print + JSON / Markdown export
+  visualize.py    Rich tree print + JSON / Markdown / HTML export
   cli.py          Typer entrypoint (mcts run ...)
 tests/            Pytest suite
 examples/         Sample problems

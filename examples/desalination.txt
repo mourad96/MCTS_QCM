@@ -1,0 +1,1 @@
+Design a low-cost desalination process suitable for off-grid coastal villages with no reliable electricity. The process should produce at least 500 L of potable water per day, run on locally repairable equipment, and avoid producing concentrated brine that damages the local ecosystem.

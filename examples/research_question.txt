@@ -1,0 +1,1 @@
+Identify a fresh research direction at the intersection of cellular biology and machine learning that could yield publishable results within 18 months on a $250k budget. The idea must be feasible on commodity GPUs (no foundation-model-scale training) and produce reusable open-source artifacts.

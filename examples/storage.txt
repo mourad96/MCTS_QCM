@@ -1,0 +1,1 @@
+Propose a novel approach to long-duration grid energy storage (>= 100 hours) that uses only earth-abundant materials, has a round-trip efficiency above 50%, and can be safely deployed in dense urban environments. Avoid lithium-ion and pumped hydro.

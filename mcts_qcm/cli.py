@@ -7,8 +7,10 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
+import webbrowser
 from pathlib import Path
 
 import typer
@@ -19,7 +21,7 @@ from rich.panel import Panel
 from mcts_qcm.config import DEFAULT_GEMINI_FLASH, MCTSConfig
 from mcts_qcm.search import IterationResult, MCTS
 from mcts_qcm.node import Node
-from mcts_qcm.visualize import print_summary, write_json, to_markdown
+from mcts_qcm.visualize import print_summary, write_json, to_markdown, generate_canvas, generate_html, _canvas_default_out
 
 app = typer.Typer(
     add_completion=False,
@@ -125,6 +127,84 @@ def run(
         md_path = Path(md_out)
         md_path.write_text(to_markdown(root), encoding="utf-8")
         console.print(f"[bold green]Markdown written to:[/bold green] {md_path.resolve()}")
+
+
+@app.command()
+def visualize(
+    json_path: Path = typer.Argument(
+        Path("tree.json"),
+        help="Path to a tree.json produced by `mcts run`.",
+    ),
+    html_out: Path | None = typer.Option(
+        None,
+        "--html-out",
+        "-o",
+        help=(
+            "Where to write the self-contained HTML explorer. "
+            "Defaults to <stem>-explorer.html next to the input file."
+        ),
+    ),
+    no_open: bool = typer.Option(
+        False,
+        "--no-open",
+        help="Do not automatically open the HTML file in the browser.",
+    ),
+    canvas_out: Path | None = typer.Option(
+        None,
+        "--canvas-out",
+        "-c",
+        help=(
+            "Where to write the .canvas.tsx file. "
+            "Defaults to the Cursor-managed canvases directory for this workspace."
+        ),
+    ),
+) -> None:
+    """Generate an interactive HTML tree explorer from a tree.json file.
+
+    Run this after `mcts run` to get an interactive DAG tree visualization with
+    a click-to-inspect detail panel that opens in your browser.
+
+    Example workflow:
+
+        mcts run "Your problem" --out tree.json
+
+        mcts visualize tree.json
+    """
+    json_path = Path(json_path)
+    if not json_path.exists():
+        console.print(f"[red]File not found:[/red] {json_path}")
+        raise typer.Exit(1)
+
+    try:
+        tree_data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        console.print(f"[red]Failed to read {json_path}:[/red] {exc}")
+        raise typer.Exit(1)
+
+    # ── HTML explorer (primary output) ────────────────────────────────────────
+    if html_out is None:
+        stem = json_path.stem
+        html_out = json_path.parent / f"{stem}-explorer.html"
+
+    html_path = generate_html(tree_data, html_out)
+    console.print(f"\n[bold green]HTML explorer written to:[/bold green] {html_path}")
+
+    if not no_open:
+        webbrowser.open(html_path.as_uri())
+        console.print("[dim]Opening in your default browser…[/dim]")
+    else:
+        console.print("[dim]Open the file above in any browser to view the interactive tree.[/dim]")
+
+    # ── Cursor Canvas (best-effort; requires a supported Cursor build) ─────────
+    if canvas_out is None:
+        canvas_dir = _canvas_default_out(Path.cwd())
+        canvas_out = canvas_dir / "mcts-tree-explorer.canvas.tsx"
+
+    try:
+        canvas_path = generate_canvas(tree_data, canvas_out)
+        console.print(f"[dim]Canvas also written to: {canvas_path}[/dim]")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[dim yellow]Canvas generation skipped: {exc}[/dim yellow]")
 
 
 @app.command()

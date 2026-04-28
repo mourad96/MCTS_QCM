@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MCTS Tree Explorer</title>
+<style>
+:root {
+  --bg:#1e1e1e;--bg-c:#252526;--bg-s:#2d2d2d;--tx:#d4d4d4;--tx2:#9d9d9d;
+  --tx3:#6e6e6e;--st:#3e3e3e;--st2:#4a4a4a;--ac:#569cd6;
+  --ok:#4ec9b0;--warn:#ce9178;--err:#f44747;
+  --ok-bg:rgba(78,201,176,.15);--err-bg:rgba(244,71,71,.15);--warn-bg:rgba(206,145,120,.12);
+}
+@media(prefers-color-scheme:light){:root{
+  --bg:#fff;--bg-c:#f3f3f3;--bg-s:#e8e8e8;--tx:#1e1e1e;--tx2:#616161;
+  --tx3:#9e9e9e;--st:#e0e0e0;--st2:#d0d0d0;--ac:#0066b8;
+  --ok:#0a7c3e;--warn:#795e26;--err:#a31515;
+  --ok-bg:rgba(10,124,62,.1);--err-bg:rgba(163,21,21,.1);--warn-bg:rgba(121,94,38,.1);
+}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--tx);height:100vh;overflow:hidden;display:flex;flex-direction:column}
+#hdr{padding:16px 24px 12px;flex-shrink:0;border-bottom:1px solid var(--st)}
+h1{font-size:20px;font-weight:600;margin-bottom:4px}
+#prob{font-size:12px;color:var(--tx2);margin-bottom:12px}
+#stats{display:flex;gap:24px}
+.sv{font-size:20px;font-weight:600}.sl{font-size:11px;color:var(--tx2);margin-top:1px}
+.sv.ok{color:var(--ok)}.sv.warn{color:var(--warn)}
+#main{display:flex;flex:1;overflow:hidden;min-height:0}
+#tree{flex:1;overflow:auto;padding:16px}
+#tree svg{display:block}
+#detail{width:380px;flex-shrink:0;border-left:1px solid var(--st);overflow:auto;padding:16px 20px}
+.nb{cursor:pointer;border:1px solid var(--st2);border-left:3px solid var(--st2);border-radius:6px;padding:7px 9px;overflow:hidden;display:flex;flex-direction:column;gap:5px;background:var(--bg-c)}
+.nb.sel{background:var(--bg-s)}.nb.bp{border-color:var(--ac)}.nb.dead{opacity:.55}
+.ni{font-size:10px;line-height:1.4;overflow:hidden;color:var(--tx)}
+.ni.root{font-style:italic}.ni.dead{text-decoration:line-through;color:var(--tx3)}
+.nb-row{display:flex;gap:3px;align-items:center;margin-top:auto}
+.badge{font-size:9px;padding:1px 3px;border-radius:3px;font-weight:700;letter-spacing:.3px}
+.badge.ok{background:var(--ok-bg);color:var(--ok)}.badge.err{background:var(--err-bg);color:var(--err)}
+.nscore{margin-left:auto;font-size:10px;color:var(--tx2);font-weight:600}
+.npruned{font-size:9px;color:var(--tx3);margin-left:3px}
+#detail h3{font-size:13px;font-weight:600;margin:12px 0 6px}
+.dstats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px}
+.dsv{font-size:20px;font-weight:600}.dsl{font-size:11px;color:var(--tx2)}
+.dsv.ok{color:var(--ok)}.dsv.err{color:var(--err)}
+.callout{padding:8px 12px;border-radius:4px;border-left:3px solid;margin:8px 0;font-size:12px}
+.ct{font-weight:600;margin-bottom:2px;font-size:12px}
+.callout.ok{border-color:var(--ok);background:var(--ok-bg)}
+.callout.warn{border-color:var(--warn);background:var(--warn-bg)}
+.didea{font-size:12px;line-height:1.6}
+hr{border:none;border-top:1px solid var(--st);margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;font-size:11px;color:var(--tx2);padding:4px 6px;border-bottom:1px solid var(--st)}
+td{padding:5px 6px;vertical-align:top;border-bottom:1px solid var(--st)}
+tr.ok td:nth-child(2){color:var(--ok);font-weight:600}
+tr.err td:nth-child(2){color:var(--err);font-weight:600}
+.dmeta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.ml{font-size:11px;color:var(--tx2)}.mv{font-size:12px;font-weight:600}
+.ph{color:var(--tx3);font-size:12px}
+</style>
+</head>
+<body>
+<div id="hdr">
+  <h1>MCTS Search Tree</h1>
+  <div id="prob"></div>
+  <div id="stats"></div>
+</div>
+<div id="main">
+  <div id="tree"><svg id="svg"></svg></div>
+  <div id="detail"><p class="ph">Click a node in the tree to inspect it.</p></div>
+</div>
+<script>
+const T={"id": 0, "idea": "Propose a novel approach to long-duration grid energy storage (>= 100 hours) that uses only earth-abundant materials, has a round-trip efficiency above 50%, and can be safely deployed in dense urban environments. Avoid lithium-ion and pumped hydro.", "depth": 0, "visits": 10, "value_sum": 6.0, "mean_value": 0.6, "dead": false, "audit": null, "children": [{"id": 1, "idea": "Explore high-temperature thermal energy storage systems using molten salts (e.g., nitrates, chlorides) or solid-state materials (e.g., concrete, ceramics) in heavily insulated, underground reservoirs. Focus on integrating this with a low-cost, earth-abundant heat engine (e.g., Stirling engine or supercritical CO2 Brayton cycle) for electricity regeneration, ensuring material compatibility and thermal stability for 100+ hour discharge and 50%+ round-trip efficiency.", "depth": 1, "visits": 5, "value_sum": 3.0, "mean_value": 0.6, "dead": false, "audit": {"novelty": false, "resource": true, "feasibility": true, "alignment": true, "reasons": {"novelty": "Molten salt and solid-state thermal energy storage, along with Stirling and supercritical CO2 Brayton cycles, are well-established concepts in energy storage and power generation, not a fresh perspective.", "resource": "The proposed materials (salts, concrete, ceramics) are earth-abundant, and the heat engines are known to be constructible with reasonable resources, making the resource consumption reasonable.", "feasibility": "High-temperature thermal storage and associated heat engines are technologically mature and physically possible, even for long durations, making the idea executable.", "alignment": "The idea directly addresses long-duration storage (>= 100 hours), uses earth-abundant materials, aims for >50% round-trip efficiency, and avoids lithium-ion and pumped hydro, aligning well with the original prompt."}}, "children": [{"id": 3, "idea": "Investigate thermochemical energy storage (TCES) systems that utilize reversible chemical reactions for storing and releasing heat. Focus on solid-gas reactions (e.g., metal hydrides, carbonates, or ammonia-based systems) or adsorption processes (e.g., zeolites, silica gel) that offer high energy density and long-term storage without significant heat loss. This would involve designing a compact reactor system for charging (endothermic reaction using electric heating) and discharging (exothermic reaction generating heat for a heat engine), prioritizing earth-abundant reactants and robust, safe containment for urban deployment.", "depth": 2, "visits": 3, "value_sum": 1.5, "mean_value": 0.5, "dead": false, "audit": {"novelty": false, "resource": true, "feasibility": true, "alignment": true, "reasons": {"novelty": "Thermochemical energy storage is a well-known concept, and the specific examples (metal hydrides, carbonates, ammonia, zeolites) are widely discussed in academic and industry literature for energy storage applications.", "resource": "The proposed earth-abundant materials and compact reactor design suggest reasonable material and spatial resource consumption, though the energy input for charging could be substantial.", "feasibility": "Thermochemical energy storage systems are actively researched and developed, indicating that the fundamental technology is executable, though urban deployment of some specific chemistries might face regulatory hurdles.", "alignment": "The idea directly addresses long-duration storage, uses earth-abundant materials, aims for high efficiency (via high energy density and low heat loss), and considers safe urban deployment, aligning well with the original prompt."}}, "children": [{"id": 7, "idea": "Explore liquid-metal thermochemical energy storage (LM-TCES) systems, specifically focusing on reversible redox reactions of earth-abundant metals dissolved in low-melting point molten salts or liquid metal alloys (e.g., Na-K alloys, lead-bismuth eutectics). The storage mechanism would involve electrochemically driving a reduction reaction during charging (e.g., depositing a metal from its salt) and then reversing it during discharge to release heat (e.g., oxidizing the metal), which can then be converted to electricity via a heat engine. The advantage here is potentially faster reaction kinetics and higher energy densities compared to solid-gas systems, while managing the unique safety challenges of liquid metals in urban environments.", "depth": 3, "visits": 1, "value_sum": 0.5, "mean_value": 0.5, "dead": true, "audit": {"novelty": true, "resource": false, "feasibility": false, "alignment": true, "reasons": {"novelty": "While thermochemical energy storage is known, the specific focus on liquid-metal thermochemical systems with reversible redox reactions for long-duration grid storage in urban environments is a relatively fresh perspective.", "resource": "Developing and deploying a large-scale liquid-metal thermochemical energy storage system, especially with the safety considerations for urban environments, would likely require significant compute, time, money, and specialized physical resources.", "feasibility": "Managing the safety challenges of liquid metals (e.g., high temperatures, reactivity, containment) in dense urban environments, along with achieving high round-trip efficiency and long duration, presents significant real-world engineering and regulatory hurdles that make it currently unexecutable at scale.", "alignment": "The idea directly addresses long-duration grid energy storage, uses earth-abundant materials, aims for high efficiency, and considers urban deployment, aligning well with the original prompt."}}, "children": []}, {"id": 8, "idea": "Investigate hybrid thermochemical and phase-change material (PCM) systems where the thermochemical reaction primarily provides the high-temperature heat for a PCM that then maintains a more stable, prolonged heat output for a heat engine. Focus on earth-abundant PCMs like concrete, basalt, or specialized salt hydrates/eutectics, coupled with a solid-gas thermochemical system (e.g., CaO/Ca(OH)2 or MgH2/Mg) that can quickly 'recharge' the PCM's heat during prolonged discharge or provide the initial high-temperature boost, thus optimizing the overall system's efficiency, cost, and long-duration heat delivery for electricity generation.", "depth": 3, "visits": 1, "value_sum": 0.25, "mean_value": 0.25, "dead": true, "audit": {"novelty": false, "resource": false, "feasibility": false, "alignment": true, "reasons": {"novelty": "Hybrid thermochemical and PCM systems are an active area of research and not a fresh perspective, with various combinations explored in academic literature.", "resource": "The complexity of integrating two distinct thermal storage mechanisms (thermochemical and PCM) with a heat engine, especially for long durations and high efficiency, will likely require significant R&D, specialized materials, and intricate control systems, making it resource-intensive.", "feasibility": "Achieving a round-trip efficiency above 50% for a hybrid thermochemical/PCM system coupled with a heat engine, especially with earth-abundant materials and safe urban deployment, presents significant engineering challenges that are not currently proven at scale.", "alignment": "The idea directly addresses long-duration storage, uses earth-abundant materials, aims for high efficiency, and considers urban deployment, aligning well with the original prompt."}}, "children": []}]}, {"id": 4, "idea": "Explore mechanical energy storage solutions based on solid-state materials, such as gravitational potential energy storage using modular, high-density blocks (e.g., concrete, steel slag) in a vertical structure or underground shaft, where electric motors raise the blocks during charging and generators lower them during discharging. The novelty would lie in optimizing the system's urban footprint, developing highly efficient and durable hoisting/lowering mechanisms, and designing a modular, scalable architecture that can safely integrate into existing urban infrastructure while ensuring minimal energy losses over 100+ hours of potential standby.", "depth": 2, "visits": 1, "value_sum": 0.75, "mean_value": 0.75, "dead": false, "audit": {"novelty": false, "resource": true, "feasibility": true, "alignment": true, "reasons": {"novelty": "Gravitational potential energy storage using blocks is a well-established concept, with companies like Energy Vault already deploying similar systems, making it not fresh.", "resource": "The use of concrete or steel slag for blocks and standard electric motors/generators suggests reasonable material and energy resource consumption for the stated problem.", "feasibility": "Gravitational energy storage systems are technologically feasible and have been demonstrated, with the main challenges being economic and site-specific rather than fundamental physics or technology.", "alignment": "The idea directly addresses long-duration storage, uses earth-abundant materials (concrete, steel slag), aims for urban deployment, and avoids lithium-ion and pumped hydro."}}, "children": []}]}, {"id": 2, "idea": "Investigate gravity-based storage systems that utilize solid earth-abundant materials (e.g., sand, gravel, concrete blocks, iron ore) in a modular, vertical lift/lower system within existing or purpose-built urban high-rises or underground shafts. Focus on optimizing the electromechanical conversion system (e.g., winches, linear generators) for high efficiency (50%+ round-trip) and identifying cost-effective ways to construct and operate these large-scale mechanical systems safely in dense urban areas, considering seismic activity and material handling.", "depth": 1, "visits": 5, "value_sum": 3.0, "mean_value": 0.6, "dead": false, "audit": {"novelty": false, "resource": true, "feasibility": true, "alignment": true, "reasons": {"novelty": "Gravity-based energy storage using solid blocks is a known concept, with several companies already developing and deploying similar systems.", "resource": "The idea proposes using earth-abundant materials and existing urban structures, which could make resource consumption reasonable compared to other large-scale storage solutions.", "feasibility": "Gravity-based systems are physically possible and existing engineering principles can be applied to design and construct such systems, even in urban environments.", "alignment": "The idea directly addresses long-duration storage, uses earth-abundant materials, aims for high efficiency, and considers urban deployment, while avoiding prohibited technologies."}}, "children": [{"id": 5, "idea": "Explore the use of pressurized air or gas stored in underground caverns or purpose-built urban infrastructure (e.g., repurposed subway tunnels, abandoned utility conduits, new concrete/steel vessels) as a form of compressed air energy storage (CAES). Focus on improving round-trip efficiency by integrating advanced thermal management systems (e.g., adiabatic CAES using molten salt or packed beds for heat recovery) and evaluating the feasibility of creating or adapting robust, leak-proof storage volumes within dense urban environments, considering safety, land use, and material abundance for compressors/expanders and heat storage mediums.", "depth": 2, "visits": 1, "value_sum": 0.5, "mean_value": 0.5, "dead": false, "audit": {"novelty": false, "resource": true, "feasibility": false, "alignment": true, "reasons": {"novelty": "Compressed Air Energy Storage (CAES) is a well-established concept, and adiabatic CAES with thermal management is also a known area of research and development.", "resource": "The idea proposes using earth-abundant materials for storage vessels and heat storage mediums, and the energy density of CAES can be reasonable for long-duration storage, making resource consumption manageable.", "feasibility": "Creating or adapting large, robust, leak-proof underground caverns or purpose-built infrastructure for high-pressure air storage in dense urban environments presents significant engineering, safety, and land-use challenges that are difficult to overcome with current real-world constraints.", "alignment": "The idea directly addresses long-duration storage, uses earth-abundant materials, aims for high efficiency, and considers urban deployment, aligning well with the original prompt."}}, "children": []}, {"id": 6, "idea": "Investigate high-temperature thermal energy storage systems using earth-abundant materials, where electricity is converted to heat and stored, then converted back to electricity. Focus on using materials like sand, rock, concrete, or molten salts (e.g., sodium chloride, potassium chloride) as the storage medium, contained in insulated tanks or underground structures. The primary challenge will be achieving high round-trip efficiency (50%+) through efficient heat exchangers and power cycles (e.g., supercritical CO2, Brayton cycle) and ensuring safe, long-duration thermal containment and material compatibility within urban settings, considering potential heat loss and material degradation over cycles.", "depth": 2, "visits": 3, "value_sum": 1.75, "mean_value": 0.5833, "dead": false, "audit": {"novelty": false, "resource": true, "feasibility": true, "alignment": true, "reasons": {"novelty": "High-temperature thermal energy storage using earth-abundant materials like sand, rock, or molten salts is a well-established concept, with many research projects and commercial ventures already exploring it.", "resource": "The proposed materials are earth-abundant, and while the scale for 100+ hours of storage would be large, the fundamental components (tanks, heat exchangers, power cycles) are within reasonable industrial resource consumption.", "feasibility": "High-temperature thermal energy storage systems are technologically feasible, with existing power cycles and material science capable of achieving the stated goals, though efficiency targets remain challenging at scale.", "alignment": "The idea directly addresses long-duration grid energy storage using earth-abundant materials, aims for 50%+ round-trip efficiency, and considers safe deployment in dense urban environments, while avoiding prohibited technologies."}}, "children": [{"id": 9, "idea": "Investigate electrochemical flow batteries utilizing earth-abundant, non-toxic electrolytes that can be stored in large external tanks, separating power and energy capacity. Focus on redox chemistries involving readily available elements like iron, zinc, or sulfur, dissolved in aqueous or non-flammable organic solvents. The key challenge will be developing electrode materials and membrane technologies that offer high selectivity, long cycle life, and low cost for 50%+ round-trip efficiency, while ensuring the safe handling and containment of large volumes of electrolyte within urban safety regulations, potentially leveraging existing industrial infrastructure or underground storage.", "depth": 3, "visits": 1, "value_sum": 0.75, "mean_value": 0.75, "dead": false, "audit": {"novelty": false, "resource": true, "feasibility": true, "alignment": true, "reasons": {"novelty": "Flow batteries, including those based on iron, zinc, or sulfur, are a well-established and widely researched area for long-duration energy storage, and the concept of separating power and energy is inherent to their design.", "resource": "The idea proposes using earth-abundant materials and leverages existing infrastructure, which suggests reasonable resource consumption compared to novel material discovery or large-scale new construction.", "feasibility": "Electrochemical flow batteries are a proven technology, and while achieving 50%+ round-trip efficiency with earth-abundant materials in urban settings presents engineering challenges, it is within the realm of current technological capabilities and ongoing research.", "alignment": "The idea directly addresses long-duration grid energy storage, uses earth-abundant materials, aims for above 50% efficiency, avoids lithium-ion and pumped hydro, and considers urban deployment, aligning perfectly with the original prompt."}}, "children": []}, {"id": 10, "idea": "Explore compressed air energy storage (CAES) systems that avoid underground caverns by utilizing high-pressure vessels or modular, above-ground containment structures, potentially integrating with existing urban infrastructure like abandoned building basements or new purpose-built towers. Focus on advanced adiabatic CAES (A-CAES) designs that store the heat of compression to improve round-trip efficiency above 50%, using earth-abundant thermal storage materials like rocks or concrete. The primary challenges will involve developing safe, cost-effective, and aesthetically acceptable high-pressure air containment solutions for urban environments, optimizing the heat recovery and turbomachinery for efficiency, and mitigating noise and vibration.", "depth": 3, "visits": 1, "value_sum": 0.25, "mean_value": 0.25, "dead": true, "audit": {"novelty": false, "resource": false, "feasibility": false, "alignment": true, "reasons": {"novelty": "While the urban integration aspect is interesting, CAES and A-CAES are well-established concepts, and above-ground pressure vessels for CAES have been explored previously.", "resource": "Developing and deploying large-scale, high-pressure containment vessels or towers in dense urban environments, along with associated turbomachinery and thermal storage, would require significant compute, time, money, and physical resources.", "feasibility": "Safely and cost-effectively deploying large, high-pressure air containment structures in dense urban environments presents significant engineering, regulatory, and public acceptance challenges that are not easily overcome with current technology and constraints.", "alignment": "The idea directly addresses long-duration storage, uses earth-abundant materials, targets >50% efficiency, avoids lithium-ion and pumped hydro, and focuses on urban deployment."}}, "children": []}]}]}]};
+const BP=new Set([0, 1, 4]);
+const DID=4;
+const NW=240,NH=100,RG=90,NG=24,PAD=32;
+const nm=new Map(),edges=[];
+(function flat(n){nm.set(n.id,n);for(const c of n.children){edges.push({f:n.id,t:c.id});flat(c)}})(T);
+function countLeaves(n){if(!n.children||!n.children.length)return 1;return n.children.reduce((s,c)=>s+countLeaves(c),0)}
+const pos=new Map();
+function layout(n,left,d){
+  const lv=countLeaves(n),w=lv*(NW+NG)-NG;
+  pos.set(n.id,{x:left+(w-NW)/2,y:PAD+d*(NH+RG)});
+  let cl=left;
+  for(const c of n.children){const cv=countLeaves(c);layout(c,cl,d+1);cl+=cv*(NW+NG);}
+}
+layout(T,PAD,0);
+let maxX=0,maxY=0;
+for(const p of pos.values()){maxX=Math.max(maxX,p.x+NW);maxY=Math.max(maxY,p.y+NH);}
+const W=maxX+PAD,H=maxY+PAD;
+const NS='http://www.w3.org/2000/svg';
+function se(tag,a={}){const e=document.createElementNS(NS,tag);for(const[k,v]of Object.entries(a))e.setAttribute(k,v);return e}
+function trunc(s,n){s=s.replace(/\s+/g,' ').trim();return s.length<=n?s:s.slice(0,n-1)+'\u2026'}
+const CK=['novelty','resource','feasibility','alignment'];
+const CL={novelty:'Novelty',resource:'Resource',feasibility:'Feasibility',alignment:'Alignment'};
+let sel=DID;
+function render(){
+  const svg=document.getElementById('svg');
+  svg.setAttribute('width',W);svg.setAttribute('height',H);svg.innerHTML='';
+  for(const e of edges){
+    const fp=pos.get(e.f),tp=pos.get(e.t);
+    const sx=fp.x+NW/2,sy=fp.y+NH,tx=tp.x+NW/2,ty=tp.y,my=(sy+ty)/2;
+    const ob=BP.has(e.f)&&BP.has(e.t);
+    svg.appendChild(se('path',{d:`M${sx} ${sy}C${sx} ${my},${tx} ${my},${tx} ${ty}`,fill:'none',
+      stroke:ob?'var(--ac)':'var(--st2)','stroke-width':ob?2.5:1.5}));
+  }
+  for(const[id,n]of nm){
+    const p=pos.get(id);
+    const fo=se('foreignObject',{x:p.x,y:p.y,width:NW,height:NH});
+    const box=document.createElement('div');
+    box.className='nb'+(BP.has(id)?' bp':'')+(id===sel?' sel':'')+(n.dead?' dead':'');
+    box.style.cssText=`width:${NW}px;height:${NH}px`;
+    const ir=n.depth===0;
+    const nd=document.createElement('div');
+    nd.className='ni'+(ir?' root':'')+(n.dead?' dead':'');
+    nd.style.maxHeight=ir?'28px':'42px';
+    nd.textContent=trunc(n.idea,ir?85:120);
+    box.appendChild(nd);
+    const row=document.createElement('div');row.className='nb-row';
+    if(n.audit){for(const k of CK){const b=document.createElement('span');b.className='badge '+(n.audit[k]?'ok':'err');b.title=`${CL[k]}: ${n.audit[k]?'PASS':'FAIL'}`;b.textContent=k[0].toUpperCase();row.appendChild(b)}}
+    const sc=document.createElement('span');sc.className='nscore';sc.textContent=Math.round(n.mean_value*100)+'%';row.appendChild(sc);
+    if(n.dead){const pr=document.createElement('span');pr.className='npruned';pr.textContent='pruned';row.appendChild(pr)}
+    box.appendChild(row);
+    box.onclick=()=>{sel=id;render();showDetail(n)};
+    fo.appendChild(box);svg.appendChild(fo);
+  }
+}
+function showDetail(n){
+  const d=document.getElementById('detail');d.innerHTML='';
+  const sc=Math.round(n.mean_value*100);
+  const ds=document.createElement('div');ds.className='dstats';
+  ds.innerHTML=`<div><div class="dsv">${n.visits}</div><div class="dsl">Visits</div></div>`+
+    `<div><div class="dsv ${sc>=75?'ok':sc<50?'err':''}">${sc}%</div><div class="dsl">Mean score</div></div>`;
+  d.appendChild(ds);
+  if(n.dead){const c=document.createElement('div');c.className='callout warn';c.innerHTML='<div class="ct">Pruned</div>Failed a hard-threshold check and removed from further expansion.';d.appendChild(c)}
+  if(BP.has(n.id)&&n.depth>0){const c=document.createElement('div');c.className='callout ok';c.innerHTML='<div class="ct">On the best path</div>Lies on the greedy best path from root to leaf.';d.appendChild(c)}
+  const h=document.createElement('h3');h.textContent='Idea';d.appendChild(h);
+  const p=document.createElement('p');p.className='didea';p.textContent=n.idea;d.appendChild(p);
+  if(n.audit){
+    d.appendChild(document.createElement('hr'));
+    const ah=document.createElement('h3');ah.textContent='QCM Audit';d.appendChild(ah);
+    const tbl=document.createElement('table');
+    tbl.innerHTML='<thead><tr><th>Check</th><th>Result</th><th>Reason</th></tr></thead>';
+    const tb=document.createElement('tbody');
+    for(const k of CK){
+      const pass=n.audit[k];const tr=document.createElement('tr');tr.className=pass?'ok':'err';
+      const reason=(n.audit.reasons&&n.audit.reasons[k])||'\u2014';
+      tr.innerHTML=`<td>${CL[k]}</td><td>${pass?'PASS':'FAIL'}</td><td>${reason}</td>`;
+      tb.appendChild(tr);
+    }
+    tbl.appendChild(tb);d.appendChild(tbl);
+  }else{
+    const p2=document.createElement('p');p2.style.cssText='color:var(--tx3);font-size:12px;font-style:italic;margin-top:8px';
+    p2.textContent='Root node — no QCM audit (this is the problem statement).';d.appendChild(p2);
+  }
+  d.appendChild(document.createElement('hr'));
+  const m=document.createElement('div');m.className='dmeta';
+  m.innerHTML=`<div><div class="ml">Depth</div><div class="mv">${n.depth}</div></div>`+
+    `<div><div class="ml">Value sum</div><div class="mv">${n.value_sum.toFixed(2)}</div></div>`+
+    `<div><div class="ml">Node ID</div><div class="mv">#${n.id}</div></div>`;
+  d.appendChild(m);
+}
+const all=Array.from(nm.values());
+document.getElementById('prob').textContent=trunc(T.idea,130);
+document.getElementById('stats').innerHTML=
+  `<div class="stat"><div class="sv">${all.length}</div><div class="sl">Total nodes</div></div>`+
+  `<div class="stat"><div class="sv">${all.filter(n=>n.audit).length}</div><div class="sl">Audited</div></div>`+
+  `<div class="stat"><div class="sv warn">${all.filter(n=>n.dead).length}</div><div class="sl">Pruned</div></div>`+
+  `<div class="stat"><div class="sv ok">${nm.has(DID)?Math.round(nm.get(DID).mean_value*100):0}%</div><div class="sl">Best-path score</div></div>`;
+render();
+const bl=nm.get(DID);if(bl)showDetail(bl);
+</script>
+</body>
+</html>

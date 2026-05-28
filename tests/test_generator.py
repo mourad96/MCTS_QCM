@@ -60,3 +60,29 @@ def test_generator_empty_payload_returns_nothing(base_config, fake_client_factor
     client = fake_client_factory(lambda _p: {"ideas": []})
     gen = IdeaGenerator(base_config, client=client)
     assert gen.generate(problem="x", node=Node(idea="x"), k=3) == []
+
+
+def test_generator_root_vs_deep_prompts(base_config, fake_client_factory) -> None:
+    captured_payloads = []
+
+    def responder(payload) -> dict:
+        captured_payloads.append(payload)
+        return {"ideas": ["Unconventional computing strategy", "Conventional grid export option"]}
+
+    client = fake_client_factory(responder)
+    gen = IdeaGenerator(base_config, client=client)
+
+    root = Node(idea="Root problem", depth=0)
+    child = root.add_child("Some parent idea")  # depth 1
+
+    # 1. Expand Root
+    root_ideas = gen.generate(problem=root.idea, node=root, k=2)
+    assert len(root_ideas) == 2
+    assert "brainstorming and innovation" in captured_payloads[0]["system"]
+
+    # 2. Expand Child (depth 1)
+    child_ideas = gen.generate(problem=root.idea, node=child, k=2)
+    assert len(child_ideas) == 2
+    assert "reasoning engine performing" in captured_payloads[1]["system"]
+
+

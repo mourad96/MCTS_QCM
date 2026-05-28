@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from mcts_qcm.config import MCTSConfig
 from mcts_qcm.llm import LLMClient, LiteLLMClient
 from mcts_qcm.node import Node
-from mcts_qcm.prompts import GENERATOR_SYSTEM, GENERATOR_USER
+from mcts_qcm.prompts import GENERATOR_SYSTEM, GENERATOR_USER, ROOT_GENERATOR_SYSTEM, ROOT_GENERATOR_USER
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
@@ -60,12 +60,18 @@ class IdeaGenerator:
     def generate(self, *, problem: str, node: Node, k: int | None = None) -> list[str]:
         """Return up to ``k`` deduplicated, distinct child ideas for ``node``."""
         k = k or self.config.k_children
-        path_str = format_path(node.path_from_root())
-        user = GENERATOR_USER.format(problem=problem, path=path_str, k=k)
+        if node.depth == 0:
+            system = ROOT_GENERATOR_SYSTEM
+            user = ROOT_GENERATOR_USER.format(problem=problem, k=k)
+        else:
+            path_str = format_path(node.path_from_root())
+            system = GENERATOR_SYSTEM
+            user = GENERATOR_USER.format(problem=problem, path=path_str, k=k)
+
         assert self.client is not None
         data = self.client.chat_json(
             model=self.config.model_gen,
-            system=GENERATOR_SYSTEM,
+            system=system,
             user=user,
             temperature=self.config.temperature_gen,
             seed=self.config.seed,

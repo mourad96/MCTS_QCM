@@ -5,7 +5,7 @@ All knobs live here so the search algorithm and CLI can stay focused.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # Stable Google Gemini 2.5 Flash ID on the Gemini API via LiteLLM (prefix `gemini/`).
 DEFAULT_GEMINI_FLASH = "gemini/gemini-2.5-flash"
@@ -23,11 +23,13 @@ class MCTSConfig:
         iterations: Number of full select/expand/evaluate/backprop iterations.
         max_depth: Maximum tree depth (root has depth 0).
         max_nodes: Hard cap on total nodes in the tree (safety + cost guard).
-        weights: Per-check weights for the QCM. Must sum to a positive value.
-        prune_on_failed_resource: If True, nodes whose resource check fails are
-            marked dead and not expanded further.
-        prune_on_failed_novelty: If True, nodes whose novelty check fails are
-            marked dead and not expanded further.
+        auto_qcm: If True, the rubric designer LLM generates a problem-specific
+            rubric at the start of the search instead of using a file-based one.
+        qcm_file: Optional path to a JSON file containing a pre-built Rubric
+            (serialized via Rubric.to_dict). Ignored when auto_qcm is True.
+        prune_threshold: Minimum weighted score (0.0–1.0) below which a node is
+            marked dead and not expanded further. Also applies to axiomatic FAIL
+            results (which set score to 0.0, always below any positive threshold).
         temperature_gen: Sampling temperature for the Idea Generator (higher =
             more diverse children).
         temperature_audit: Sampling temperature for the QCM Auditor (lower =
@@ -46,26 +48,12 @@ class MCTSConfig:
     max_depth: int = 4
     max_nodes: int = 200
 
-    weights: dict[str, float] = field(
-        default_factory=lambda: {
-            "novelty": 1.0,
-            "resource": 1.0,
-            "feasibility": 1.0,
-            "alignment": 1.0,
-        }
-    )
-    prune_on_failed_resource: bool = True
-    prune_on_failed_novelty: bool = False
+    auto_qcm: bool = False
+    qcm_file: str | None = None
+    prune_threshold: float = 0.25
 
     temperature_gen: float = 0.9
     temperature_audit: float = 0.1
     request_timeout: float = 60.0
     max_retries: int = 2
     seed: int | None = None
-
-    def normalized_weights(self) -> dict[str, float]:
-        """Return weights normalized so they sum to 1.0."""
-        total = sum(self.weights.values())
-        if total <= 0:
-            raise ValueError("MCTSConfig.weights must sum to a positive value.")
-        return {k: v / total for k, v in self.weights.items()}

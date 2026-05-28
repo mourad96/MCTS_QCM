@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from mcts_qcm.auditor import QCMResult
+    from mcts_qcm.auditor import AuditResult
 
 
 _id_counter = itertools.count()
@@ -40,7 +40,7 @@ class Node:
     children: list[Node] = field(default_factory=list)
     visits: int = 0
     value_sum: float = 0.0
-    audit: QCMResult | None = None
+    audit: AuditResult | None = None
     depth: int = 0
     dead: bool = False
     node_id: int = field(default_factory=_next_id)

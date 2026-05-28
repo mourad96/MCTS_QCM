@@ -1,35 +1,87 @@
-"""Tests for UCB1 and pass-rate math."""
+"""Tests for UCB1, compute_score, and best-path extraction."""
 
 from __future__ import annotations
 
 import math
 
-from mcts_qcm.auditor import QCMResult
+from mcts_qcm.auditor import AuditResult, SubQuestionResult
 from mcts_qcm.node import Node
-from mcts_qcm.scoring import greedy_best_path, pass_rate, select_best_child, ucb1
+from mcts_qcm.rubric import Criterion, Rubric, SubQuestion
+from mcts_qcm.scoring import compute_score, greedy_best_path, select_best_child, ucb1
 
 
-def _audit(n: int) -> QCMResult:
-    """Build a QCMResult with `n` of 4 checks passing (in declaration order)."""
-    flags = [True] * n + [False] * (4 - n)
-    return QCMResult(
-        novelty=flags[0], resource=flags[1], feasibility=flags[2], alignment=flags[3]
+def _make_audit(**tiers: str) -> AuditResult:
+    """Build an AuditResult from key=tier kwargs."""
+    return AuditResult(results=[
+        SubQuestionResult(key=k, tier=v) for k, v in tiers.items()
+    ])
+
+
+# ---------------------------------------------------------------------------
+# compute_score
+# ---------------------------------------------------------------------------
+
+def test_compute_score_all_strong(sample_rubric) -> None:
+    audit = _make_audit(
+        feasibility_tech="STRONG", feasibility_time="STRONG", feasibility_skill="STRONG",
+        cost_capital="STRONG", cost_operating="STRONG",
+        alignment_direct="STRONG", alignment_scope="STRONG", alignment_user="STRONG",
     )
+    assert compute_score(audit, sample_rubric) == 1.0
 
 
-def test_pass_rate_equal_weights() -> None:
-    assert pass_rate(_audit(4)) == 1.0
-    assert pass_rate(_audit(0)) == 0.0
-    assert pass_rate(_audit(3)) == 0.75
-    assert pass_rate(_audit(2)) == 0.5
+def test_compute_score_all_fail(sample_rubric) -> None:
+    audit = _make_audit(
+        feasibility_tech="FAIL", feasibility_time="FAIL", feasibility_skill="FAIL",
+        cost_capital="FAIL", cost_operating="FAIL",
+        alignment_direct="FAIL", alignment_scope="FAIL", alignment_user="FAIL",
+    )
+    assert compute_score(audit, sample_rubric) == 0.0
 
 
-def test_pass_rate_custom_weights() -> None:
-    audit = _audit(2)  # novelty=T, resource=T, feasibility=F, alignment=F
-    weights = {"novelty": 1.0, "resource": 1.0, "feasibility": 0.0, "alignment": 2.0}
-    # Score = (1*1 + 1*1 + 0*0 + 2*0) / (1+1+0+2) = 2/4 = 0.5
-    assert pass_rate(audit, weights) == 0.5
+def test_compute_score_mixed(sample_rubric) -> None:
+    audit = _make_audit(
+        feasibility_tech="STRONG", feasibility_time="ADEQUATE", feasibility_skill="WEAK",
+        cost_capital="STRONG", cost_operating="ADEQUATE",
+        alignment_direct="STRONG", alignment_scope="STRONG", alignment_user="STRONG",
+    )
+    score = compute_score(audit, sample_rubric)
+    # feasibility: (1.0 + 0.66 + 0.33) / 3 = 0.6633
+    # cost: (1.0 + 0.66) / 2 = 0.83 (weight 1.5)
+    # alignment: (1.0 + 1.0 + 1.0) / 3 = 1.0 (weight 2.0)
+    # overall: (0.6633*1.0 + 0.83*1.5 + 1.0*2.0) / (1.0+1.5+2.0) = 3.9083/4.5 ≈ 0.8685
+    assert 0.86 < score < 0.88
 
+
+def test_compute_score_respects_weights() -> None:
+    """A criterion with weight=0.0 should not affect the score."""
+    rubric = Rubric(criteria=[
+        Criterion(key="a", name="A", description="d", weight=0.0, sub_questions=[
+            SubQuestion(key="a_1", question="?"),
+        ]),
+        Criterion(key="b", name="B", description="d", weight=1.0, sub_questions=[
+            SubQuestion(key="b_1", question="?"),
+        ]),
+    ])
+    audit = _make_audit(a_1="FAIL", b_1="STRONG")
+    # weight-0 criterion is excluded from denominator
+    score = compute_score(audit, rubric)
+    assert score == 1.0
+
+
+def test_compute_score_empty_audit() -> None:
+    rubric = Rubric(criteria=[
+        Criterion(key="a", name="A", description="d", weight=1.0, sub_questions=[
+            SubQuestion(key="a_1", question="?"),
+        ]),
+    ])
+    audit = AuditResult(results=[])
+    assert compute_score(audit, rubric) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# UCB1 (unchanged)
+# ---------------------------------------------------------------------------
 
 def test_ucb1_unvisited_returns_inf() -> None:
     n = Node(idea="x")

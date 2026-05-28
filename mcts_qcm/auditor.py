@@ -1,12 +1,14 @@
 """QCM Auditor — the LLM-driven value function of the MCTS engine.
 
-Performs a strict 4-question audit of an idea (Novelty, Resource, Feasibility,
-Alignment) and returns a Pydantic-validated ``QCMResult``. The pass-rate over
-those four checks is the value used by UCB1.
+Performs a tiered evaluation of an idea against a dynamic Rubric.  Each
+sub-question is classified into one of four tiers (STRONG / ADEQUATE /
+WEAK / FAIL) by the LLM.  The tiers are mapped to numerical values
+deterministically in Python.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,84 +16,142 @@ from pydantic import BaseModel, Field, ValidationError
 
 from mcts_qcm.config import MCTSConfig
 from mcts_qcm.generator import format_path
-from mcts_qcm.llm import LLMClient, LiteLLMClient, LLMError
+from mcts_qcm.llm import LLMClient, LLMError, LiteLLMClient
 from mcts_qcm.node import Node
-from mcts_qcm.prompts import AUDITOR_SYSTEM, AUDITOR_USER
+from mcts_qcm.prompts import TIERED_AUDITOR_USER, build_tiered_auditor_system
+from mcts_qcm.rubric import Rubric, TIER_NAMES
+
+logger = logging.getLogger(__name__)
 
 
-class QCMResult(BaseModel):
-    """The 4-question multiple-choice audit result for a single idea."""
+# ---------------------------------------------------------------------------
+# Pydantic result models
+# ---------------------------------------------------------------------------
 
-    novelty: bool
-    resource: bool
-    feasibility: bool
-    alignment: bool
-    reasons: dict[str, str] = Field(default_factory=dict)
+class SubQuestionResult(BaseModel):
+    """Result for one atomic sub-question."""
 
-    @property
-    def num_passed(self) -> int:
-        return int(self.novelty) + int(self.resource) + int(self.feasibility) + int(self.alignment)
+    key: str
+    tier: str = "FAIL"  # "STRONG" | "ADEQUATE" | "WEAK" | "FAIL"
+    reason: str = ""
 
-    @property
-    def fraction_passed(self) -> float:
-        return self.num_passed / 4.0
+
+class AuditResult(BaseModel):
+    """Complete tiered audit result for a single idea."""
+
+    results: list[SubQuestionResult] = Field(default_factory=list)
+
+    def tier_counts(self) -> dict[str, int]:
+        """Count occurrences of each tier, e.g. {"STRONG": 7, ...}."""
+        counts = {t: 0 for t in TIER_NAMES}
+        for r in self.results:
+            tier = r.tier.upper()
+            if tier in counts:
+                counts[tier] += 1
+        return counts
 
     def summary(self) -> str:
-        flags = "".join(
-            "Y" if v else "N"
-            for v in (self.novelty, self.resource, self.feasibility, self.alignment)
-        )
-        return f"{self.num_passed}/4 [N{flags[0]} R{flags[1]} F{flags[2]} A{flags[3]}]"
+        """Compact summary, e.g. '7S 3A 1W 1F'."""
+        c = self.tier_counts()
+        return f"{c['STRONG']}S {c['ADEQUATE']}A {c['WEAK']}W {c['FAIL']}F"
+
+    def has_axiomatic_failure(self, axiomatic_keys: set[str]) -> bool:
+        """True if any axiomatic sub-question scored FAIL."""
+        for r in self.results:
+            if r.key in axiomatic_keys and r.tier.upper() == "FAIL":
+                return True
+        return False
+
+    @property
+    def num_results(self) -> int:
+        return len(self.results)
 
 
-def _coerce_pass(value: Any) -> bool:
-    """Tolerant coercion for ``pass`` fields the LLM might return as strings."""
+# ---------------------------------------------------------------------------
+# Tolerant parsing helpers
+# ---------------------------------------------------------------------------
+
+# Common LLM-generated synonyms mapped to canonical tier names.
+_TIER_ALIASES: dict[str, str] = {
+    "STRONG": "STRONG",
+    "PASS": "STRONG",
+    "GOOD": "STRONG",
+    "EXCELLENT": "STRONG",
+    "HIGH": "STRONG",
+    "YES": "STRONG",
+    "ADEQUATE": "ADEQUATE",
+    "OK": "ADEQUATE",
+    "OKAY": "ADEQUATE",
+    "MODERATE": "ADEQUATE",
+    "MEDIUM": "ADEQUATE",
+    "PARTIAL": "ADEQUATE",
+    "WEAK": "WEAK",
+    "LOW": "WEAK",
+    "POOR": "WEAK",
+    "MARGINAL": "WEAK",
+    "FAIL": "FAIL",
+    "FAILURE": "FAIL",
+    "NO": "FAIL",
+    "IMPOSSIBLE": "FAIL",
+    "NONE": "FAIL",
+}
+
+
+def _coerce_tier(value: Any) -> str:
+    """Tolerantly coerce an LLM-emitted tier value to a canonical tier name."""
     if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
+        return "STRONG" if value else "FAIL"
     if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "y", "1", "pass", "passed"}
-    return False
+        normed = value.strip().upper()
+        if normed in TIER_NAMES:
+            return normed
+        return _TIER_ALIASES.get(normed, "FAIL")
+    if isinstance(value, (int, float)):
+        return "STRONG" if value else "FAIL"
+    return "FAIL"
 
 
-def parse_qcm_payload(data: dict[str, Any]) -> QCMResult:
-    """Build a ``QCMResult`` from the raw JSON payload returned by the LLM.
+def parse_tiered_payload(data: dict[str, Any], rubric: Rubric) -> AuditResult:
+    """Build an ``AuditResult`` from the raw JSON payload returned by the LLM.
 
-    Accepts the canonical schema (``{check: {pass, reason}}``) and tolerates
-    common deviations like flat ``{check: bool}`` or ``passed`` instead of
-    ``pass``. Raises ``ValidationError`` if a required check is missing.
+    Accepts the canonical schema (``{sq_key: {tier, reason}}``) and tolerates
+    common deviations like flat ``{sq_key: "STRONG"}`` or missing sub-questions
+    (defaulted to FAIL).
     """
-    required = ("novelty", "resource", "feasibility", "alignment")
-    flags: dict[str, bool] = {}
-    reasons: dict[str, str] = {}
-    for key in required:
-        if key not in data:
-            raise ValidationError.from_exception_data(
-                title="QCMResult",
-                line_errors=[
-                    {
-                        "type": "missing",
-                        "loc": (key,),
-                        "input": data,
-                    }
-                ],
-            )
-        entry = data[key]
-        if isinstance(entry, dict):
-            raw_pass = entry.get("pass", entry.get("passed"))
-            flags[key] = _coerce_pass(raw_pass)
-            reason = entry.get("reason", "")
-            if reason:
-                reasons[key] = str(reason)
-        else:
-            flags[key] = _coerce_pass(entry)
-    return QCMResult(**flags, reasons=reasons)
+    results: list[SubQuestionResult] = []
 
+    for sq in rubric.all_sub_questions():
+        entry = data.get(sq.key)
+        if entry is None:
+            results.append(
+                SubQuestionResult(
+                    key=sq.key,
+                    tier="FAIL",
+                    reason="Not evaluated by auditor.",
+                )
+            )
+            continue
+
+        if isinstance(entry, dict):
+            raw_tier = entry.get("tier", entry.get("classification", "FAIL"))
+            tier = _coerce_tier(raw_tier)
+            reason = str(entry.get("reason", ""))
+        else:
+            tier = _coerce_tier(entry)
+            reason = ""
+
+        results.append(SubQuestionResult(key=sq.key, tier=tier, reason=reason))
+
+    return AuditResult(results=results)
+
+
+# ---------------------------------------------------------------------------
+# QCMAuditor
+# ---------------------------------------------------------------------------
 
 @dataclass
 class QCMAuditor:
-    """Audits a single idea against the 4-question QCM checklist."""
+    """Audits a single idea against a tiered rubric."""
 
     config: MCTSConfig
     client: LLMClient | None = None
@@ -100,36 +160,40 @@ class QCMAuditor:
         if self.client is None:
             self.client = LiteLLMClient(max_retries=self.config.max_retries)
 
-    def audit(self, *, problem: str, node: Node) -> QCMResult:
-        """Audit ``node.idea`` against the original ``problem``."""
+    def audit(self, *, problem: str, node: Node, rubric: Rubric) -> AuditResult:
+        """Audit ``node.idea`` against the ``rubric`` for the given ``problem``."""
         parent_path = node.parent.path_from_root() if node.parent else [node]
         path_str = format_path(parent_path)
-        user = AUDITOR_USER.format(problem=problem, path=path_str, idea=node.idea)
+
+        system = build_tiered_auditor_system(rubric)
+        user = TIERED_AUDITOR_USER.format(
+            problem=problem, path=path_str, idea=node.idea,
+        )
+
         assert self.client is not None
         try:
             data = self.client.chat_json(
                 model=self.config.model_audit,
-                system=AUDITOR_SYSTEM,
+                system=system,
                 user=user,
                 temperature=self.config.temperature_audit,
                 seed=self.config.seed,
                 timeout=self.config.request_timeout,
             )
         except LLMError:
-            return QCMResult(
-                novelty=False,
-                resource=False,
-                feasibility=False,
-                alignment=False,
-                reasons={"error": "LLM call failed; treated as 0/4."},
-            )
+            return _fail_all(rubric, reason="LLM call failed; treated as all-FAIL.")
+
         try:
-            return parse_qcm_payload(data)
+            return parse_tiered_payload(data, rubric)
         except (ValidationError, TypeError, KeyError):
-            return QCMResult(
-                novelty=False,
-                resource=False,
-                feasibility=False,
-                alignment=False,
-                reasons={"error": "Auditor returned a malformed payload; treated as 0/4."},
-            )
+            return _fail_all(rubric, reason="Auditor returned a malformed payload; treated as all-FAIL.")
+
+
+def _fail_all(rubric: Rubric, *, reason: str) -> AuditResult:
+    """Build an AuditResult with every sub-question set to FAIL."""
+    return AuditResult(
+        results=[
+            SubQuestionResult(key=sq.key, tier="FAIL", reason=reason)
+            for sq in rubric.all_sub_questions()
+        ]
+    )

@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
 import sys
+import tempfile
 import webbrowser
 from pathlib import Path
 
@@ -17,20 +20,31 @@ import typer
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.table import Table
 
 from mcts_qcm.config import DEFAULT_GEMINI_FLASH, MCTSConfig
-from mcts_qcm.search import IterationResult, MCTS
+from mcts_qcm.designer import QCMDesigner
 from mcts_qcm.node import Node
-from mcts_qcm.visualize import print_summary, write_json, to_markdown, generate_canvas, generate_html, _canvas_default_out
+from mcts_qcm.rubric import Rubric
+from mcts_qcm.search import IterationResult, MCTS
+from mcts_qcm.visualize import (
+    generate_canvas,
+    generate_html,
+    print_summary,
+    to_markdown,
+    write_json,
+    _canvas_default_out,
+)
 
 app = typer.Typer(
     add_completion=False,
     rich_markup_mode="rich",
     help=(
-        "AlphaGo-style tree search where an LLM generates ideas and a 4-question "
+        "AlphaGo-style tree search where an LLM generates ideas and a tiered "
         "QCM audit replaces the neural value head.\n\n"
         "[bold]Quick start[/bold]\n\n"
-        "  [cyan]mcts run[/cyan] [green]\"Your problem\"[/green] --out tree.json\n\n"
+        "  [cyan]mcts run[/cyan] [green]\"Your problem\"[/green] --auto-qcm --out tree.json\n\n"
         "  [cyan]mcts visualize[/cyan] tree.json\n\n"
         "Run any sub-command with [bold]--help[/bold] for full flag details."
     ),
@@ -49,6 +63,135 @@ def _setup_logging(verbose: bool) -> None:
         logging.getLogger("LiteLLM").setLevel(logging.WARNING)
         logging.getLogger("litellm").setLevel(logging.WARNING)
 
+
+# ---------------------------------------------------------------------------
+# Rubric design helpers
+# ---------------------------------------------------------------------------
+
+def _display_rubric(rubric: Rubric, con: Console) -> None:
+    """Pretty-print a Rubric as a Rich table for interactive review."""
+    table = Table(
+        title="Proposed Evaluation Rubric",
+        show_lines=True,
+        expand=True,
+    )
+    table.add_column("Criterion", style="bold cyan", no_wrap=True)
+    table.add_column("Weight", justify="center", width=8)
+    table.add_column("Sub-Question", style="white")
+    table.add_column("Axiomatic", justify="center", width=10)
+
+    for criterion in rubric.criteria:
+        first = True
+        for sq in criterion.sub_questions:
+            crit_display = f"{criterion.name}\n[dim]{criterion.description}[/dim]" if first else ""
+            weight_display = str(criterion.weight) if first else ""
+            axio = "[bold red]YES[/bold red]" if sq.axiomatic else "[dim]no[/dim]"
+            table.add_row(
+                crit_display,
+                weight_display,
+                f"[bold]{sq.key}[/bold]\n{sq.question}",
+                axio,
+            )
+            first = False
+
+    con.print()
+    con.print(table)
+    con.print(
+        f"\n[dim]Total criteria: {len(rubric.criteria)} | "
+        f"Total sub-questions: {rubric.sub_question_count()} | "
+        f"Axiomatic keys: {rubric.axiomatic_keys() or 'none'}[/dim]\n"
+    )
+
+
+def _edit_rubric_in_editor(rubric: Rubric) -> Rubric:
+    """Dump rubric to a temp JSON file, open in $EDITOR, reload after close."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="mcts_rubric_", delete=False, encoding="utf-8",
+    ) as f:
+        json.dump(rubric.to_dict(), f, indent=2, ensure_ascii=False)
+        tmp_path = f.name
+
+    editor = os.environ.get("EDITOR", os.environ.get("VISUAL", "notepad"))
+    try:
+        subprocess.run([editor, tmp_path], check=True)
+    except FileNotFoundError:
+        console.print(f"[red]Editor '{editor}' not found. Set $EDITOR.[/red]")
+        return rubric
+    except subprocess.CalledProcessError:
+        console.print("[yellow]Editor exited with an error; keeping original rubric.[/yellow]")
+        return rubric
+
+    try:
+        data = json.loads(Path(tmp_path).read_text(encoding="utf-8"))
+        edited = Rubric.from_dict(data)
+        console.print("[green]Rubric updated from editor.[/green]")
+        return edited
+    except Exception as exc:
+        console.print(f"[red]Failed to parse edited rubric: {exc}. Keeping original.[/red]")
+        return rubric
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _design_rubric(problem: str, config: MCTSConfig, con: Console) -> Rubric:
+    """Phase 0: design the evaluation rubric before MCTS starts."""
+    # Load from file if provided
+    if config.qcm_file:
+        qcm_path = Path(config.qcm_file)
+        if not qcm_path.exists():
+            con.print(f"[red]QCM file not found:[/red] {qcm_path}")
+            raise typer.Exit(1)
+        try:
+            data = json.loads(qcm_path.read_text(encoding="utf-8"))
+            rubric = Rubric.from_dict(data)
+            con.print(f"[bold green]Loaded rubric from:[/bold green] {qcm_path}")
+            return rubric
+        except Exception as exc:
+            con.print(f"[red]Failed to parse rubric file: {exc}[/red]")
+            raise typer.Exit(1) from exc
+
+    # LLM proposes the rubric
+    designer = QCMDesigner(config)
+    con.print("[dim]Designing evaluation rubric for this problem…[/dim]")
+    try:
+        rubric = designer.propose(problem)
+    except Exception as exc:
+        con.print(f"[red]Rubric design failed: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if config.auto_qcm:
+        con.print("[dim]Auto-QCM: using LLM-proposed rubric without review.[/dim]")
+        _display_rubric(rubric, con)
+        return rubric
+
+    # Interactive review loop
+    while True:
+        _display_rubric(rubric, con)
+        choice = Prompt.ask(
+            "[bold]Accept this rubric?[/bold]",
+            choices=["a", "e", "r"],
+            default="a",
+        )
+        if choice == "a":
+            break
+        elif choice == "e":
+            rubric = _edit_rubric_in_editor(rubric)
+        elif choice == "r":
+            con.print("[dim]Regenerating rubric…[/dim]")
+            try:
+                rubric = designer.propose(problem)
+            except Exception as exc:
+                con.print(f"[yellow]Regeneration failed: {exc}. Keeping current rubric.[/yellow]")
+
+    return rubric
+
+
+# ---------------------------------------------------------------------------
+# CLI commands
+# ---------------------------------------------------------------------------
 
 @app.command()
 def run(
@@ -108,35 +251,37 @@ def run(
         None, "--seed",
         help="Integer seed forwarded to the LLM API for reproducible runs (not all providers honour it).",
     ),
-    no_prune_resource: bool = typer.Option(
-        False, "--no-prune-resource",
-        help="Disable auto-pruning of nodes that fail the Resource check. By default such nodes are marked dead.",
+    auto_qcm: bool = typer.Option(
+        False, "--auto-qcm",
+        help="Skip interactive rubric approval and use the LLM-proposed rubric as-is.",
     ),
-    prune_novelty: bool = typer.Option(
-        False, "--prune-novelty",
-        help="Also prune nodes that fail the Novelty check (off by default — novelty failures are informational).",
+    qcm_file: Path | None = typer.Option(
+        None, "--qcm-file",
+        help="Load a pre-authored rubric from a JSON file (skips designer + interactive prompts).",
+    ),
+    prune_threshold: float = typer.Option(
+        0.25, "--prune-threshold",
+        help="Weighted score below this value triggers node pruning. Default 0.25.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable DEBUG-level logging."),
 ) -> None:
     """Run the MCTS QCM engine on [bold]PROBLEM[/bold] and write the search tree to a JSON file.
 
-    [bold]Basic usage[/bold]
+    [bold]Basic usage (interactive rubric design)[/bold]
 
       mcts run "Design a low-cost desalination process for off-grid villages"
 
-    [bold]More iterations, custom output, then visualize[/bold]
+    [bold]Auto-QCM (skip rubric review)[/bold]
 
-      mcts run "Your problem" --iters 40 --k 4 --out tree.json
+      mcts run "Your problem" --auto-qcm --iters 40 --out tree.json
+
+    [bold]Reuse a saved rubric[/bold]
+
+      mcts run "Your problem" --qcm-file .mcts_rubric.json
+
+    [bold]Then visualize[/bold]
 
       mcts visualize tree.json
-
-    [bold]Use a different model provider[/bold]
-
-      mcts run "Your problem" --model-gen openai/gpt-4o-mini --model-audit openai/gpt-4o-mini
-
-    [bold]Keep a fast auditor, use a stronger generator[/bold]
-
-      mcts run "Your problem" --model-gen anthropic/claude-3-5-sonnet-latest
 
     [dim]Supported providers (via LiteLLM): Google (gemini/...), OpenAI (openai/...),
     Anthropic (anthropic/...), Groq (groq/...), Ollama (ollama/...).
@@ -156,8 +301,9 @@ def run(
         temperature_gen=temperature_gen,
         temperature_audit=temperature_audit,
         seed=seed,
-        prune_on_failed_resource=not no_prune_resource,
-        prune_on_failed_novelty=prune_novelty,
+        auto_qcm=auto_qcm,
+        qcm_file=str(qcm_file) if qcm_file else None,
+        prune_threshold=prune_threshold,
     )
 
     console.print(
@@ -171,6 +317,9 @@ def run(
         )
     )
 
+    # Phase 0: Design the evaluation rubric
+    rubric = _design_rubric(problem, config, console)
+
     def _on_iter(result: IterationResult, root: Node) -> None:
         new_audits = ", ".join(
             child.audit.summary() if child.audit else "?" for child in result.new_children
@@ -181,7 +330,7 @@ def run(
             f"new: [{new_audits}]"
         )
 
-    engine = MCTS(config=config, on_iteration=_on_iter)
+    engine = MCTS(config=config, rubric=rubric, on_iteration=_on_iter)
     try:
         root = engine.run(problem)
     except KeyboardInterrupt:
@@ -191,12 +340,27 @@ def run(
     console.print()
     print_summary(root, console=console)
 
-    out_path = write_json(root, out)
+    # Write tree.json with embedded rubric
+    out_data = {"rubric": rubric.to_dict(), "tree": root.to_dict()}
+    out_path = Path(out)
+    out_path.write_text(json.dumps(out_data, indent=2, ensure_ascii=False), encoding="utf-8")
     console.print(f"\n[bold green]Tree written to:[/bold green] {out_path.resolve()}")
+
     if md_out is not None:
         md_path = Path(md_out)
         md_path.write_text(to_markdown(root), encoding="utf-8")
         console.print(f"[bold green]Markdown written to:[/bold green] {md_path.resolve()}")
+
+    # Save rubric for reuse
+    rubric_path = Path(".mcts_rubric.json")
+    rubric_path.write_text(
+        json.dumps(rubric.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8",
+    )
+    console.print(
+        f"\n[dim]Your custom QCM rubric has been saved to:[/dim] {rubric_path}\n"
+        f"[dim]To bypass prompts and re-run this exact rubric later, use:[/dim]\n"
+        f"  mcts run \"{problem}\" --qcm-file {rubric_path}"
+    )
 
 
 @app.command()
@@ -256,10 +420,16 @@ def visualize(
         raise typer.Exit(1)
 
     try:
-        tree_data = json.loads(json_path.read_text(encoding="utf-8"))
+        raw = json.loads(json_path.read_text(encoding="utf-8"))
     except Exception as exc:
         console.print(f"[red]Failed to read {json_path}:[/red] {exc}")
         raise typer.Exit(1)
+
+    # Support both new format {"rubric": ..., "tree": ...} and raw tree dict
+    if isinstance(raw, dict) and "tree" in raw:
+        tree_data = raw["tree"]
+    else:
+        tree_data = raw
 
     # ── HTML explorer (primary output) ────────────────────────────────────────
     if html_out is None:

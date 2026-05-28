@@ -1,7 +1,7 @@
 """MCTS orchestrator: select / expand / evaluate / backprop.
 
 This is the heart of the engine. The four phases follow classical UCT, but the
-"simulation/rollout" step is replaced by a single LLM-driven QCM audit (the
+"simulation/rollout" step is replaced by a single LLM-driven tiered audit (the
 value head of the system, AlphaZero-style).
 """
 
@@ -11,12 +11,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable
 
-from mcts_qcm.auditor import QCMAuditor, QCMResult
+from mcts_qcm.auditor import AuditResult, QCMAuditor
 from mcts_qcm.config import MCTSConfig
 from mcts_qcm.generator import IdeaGenerator
 from mcts_qcm.llm import LLMClient
 from mcts_qcm.node import Node
-from mcts_qcm.scoring import pass_rate, select_best_child
+from mcts_qcm.rubric import Rubric
+from mcts_qcm.scoring import compute_score, select_best_child
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class MCTS:
     """Run an LLM-driven MCTS search over ideas."""
 
     config: MCTSConfig
+    rubric: Rubric
     generator: IdeaGenerator | None = None
     auditor: QCMAuditor | None = None
     on_iteration: Callable[[IterationResult, Node], None] | None = None
@@ -49,6 +51,7 @@ class MCTS:
     def with_client(
         cls,
         config: MCTSConfig,
+        rubric: Rubric,
         client: LLMClient,
         *,
         on_iteration: Callable[[IterationResult, Node], None] | None = None,
@@ -56,6 +59,7 @@ class MCTS:
         """Convenience constructor that shares one LLM client between gen & audit."""
         return cls(
             config=config,
+            rubric=rubric,
             generator=IdeaGenerator(config, client=client),
             auditor=QCMAuditor(config, client=client),
             on_iteration=on_iteration,
@@ -64,7 +68,6 @@ class MCTS:
     def run(self, problem: str) -> Node:
         """Run the full MCTS search and return the root node of the populated tree."""
         root = Node(idea=problem, depth=0)
-        weights = self.config.weights
 
         for i in range(1, self.config.iterations + 1):
             if self._node_count(root) >= self.config.max_nodes:
@@ -72,13 +75,14 @@ class MCTS:
                 break
 
             leaf = self._select(root)
-            new_children = self._expand_and_evaluate(problem, leaf, weights)
+            new_children = self._expand_and_evaluate(problem, leaf)
 
             if not new_children:
                 self._backprop(leaf, leaf.mean_value if leaf.visits else 0.0)
             else:
                 for child in new_children:
-                    self._backprop(child, pass_rate(child.audit, weights))  # type: ignore[arg-type]
+                    score = compute_score(child.audit, self.rubric)  # type: ignore[arg-type]
+                    self._backprop(child, score)
 
             result = IterationResult(
                 iteration=i, selected_idea=leaf.idea, new_children=new_children
@@ -108,7 +112,6 @@ class MCTS:
         self,
         problem: str,
         leaf: Node,
-        weights: dict[str, float],
     ) -> list[Node]:
         """Generate K children, audit each, attach as live/dead nodes."""
         if leaf.dead or leaf.depth >= self.config.max_depth:
@@ -126,22 +129,27 @@ class MCTS:
             logger.exception("Idea generation failed at depth=%d", leaf.depth)
             return []
 
+        axiomatic_keys = self.rubric.axiomatic_keys()
         new_children: list[Node] = []
         for idea in ideas:
             child = leaf.add_child(idea)
             try:
-                audit = self.auditor.audit(problem=problem, node=child)
+                audit = self.auditor.audit(problem=problem, node=child, rubric=self.rubric)
             except Exception:  # noqa: BLE001
                 logger.exception("Auditor failed for idea: %s", idea[:80])
-                audit = QCMResult(
-                    novelty=False, resource=False, feasibility=False, alignment=False,
-                    reasons={"error": "Audit raised an unexpected exception."},
+                audit = AuditResult(
+                    results=[],
                 )
             child.audit = audit
 
-            if self.config.prune_on_failed_resource and not audit.resource:
+            # Axiomatic pruning: immediate hard prune if any axiomatic
+            # sub-question scored FAIL.
+            if audit.has_axiomatic_failure(axiomatic_keys):
                 child.dead = True
-            if self.config.prune_on_failed_novelty and not audit.novelty:
+
+            # Threshold pruning: prune if overall weighted score is too low.
+            score = compute_score(audit, self.rubric)
+            if score < self.config.prune_threshold:
                 child.dead = True
 
             new_children.append(child)
@@ -149,7 +157,7 @@ class MCTS:
 
     @staticmethod
     def _backprop(node: Node, value: float) -> None:
-        """Propagate `value` (a pass-rate in [0,1]) up to the root."""
+        """Propagate `value` (a score in [0,1]) up to the root."""
         cur: Node | None = node
         while cur is not None:
             cur.visits += 1

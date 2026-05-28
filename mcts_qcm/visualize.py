@@ -30,8 +30,20 @@ def _node_label(node: Node) -> Text:
 
     audit = node.audit
     if audit is not None:
-        passed = audit.num_passed
-        color = {0: "red", 1: "red", 2: "yellow", 3: "green", 4: "bright_green"}[passed]
+        counts = audit.tier_counts()
+        total = sum(counts.values())
+        strong = counts.get("STRONG", 0)
+        fail = counts.get("FAIL", 0)
+        if total == 0:
+            color = "red"
+        elif fail > total // 2:
+            color = "red"
+        elif strong >= total // 2:
+            color = "bright_green"
+        elif strong + counts.get("ADEQUATE", 0) >= total // 2:
+            color = "green"
+        else:
+            color = "yellow"
         label.append(f"[{audit.summary()}] ", style=f"bold {color}")
     else:
         label.append("[unaudited] ", style="dim")
@@ -128,10 +140,6 @@ def to_markdown(root: Node) -> str:
 
 # ── Canvas generation ─────────────────────────────────────────────────────────
 
-# Raw TypeScript template for the canvas.  Insertion markers:
-#   __TREE_JSON_B64__       base-64 encoded JSON of the full tree dict
-#   __BEST_PATH_IDS__       comma-separated list of node IDs on the best path
-#   __DEFAULT_SELECTED_ID__ integer ID of the best-path leaf (default selection)
 _CANVAS_TEMPLATE = r"""import {
   computeDAGLayout,
   useHostTheme,
@@ -149,12 +157,13 @@ _CANVAS_TEMPLATE = r"""import {
 } from "cursor/canvas";
 
 // ── Types ────────────────────────────────────────────────────────────────────
+type SubQResult = {
+  key: string;
+  tier: string;
+  reason: string;
+};
 type AuditResult = {
-  novelty: boolean;
-  resource: boolean;
-  feasibility: boolean;
-  alignment: boolean;
-  reasons: Record<string, string>;
+  results: SubQResult[];
 };
 type TreeNode = {
   id: number;
@@ -205,18 +214,26 @@ function trunc(text: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1) + "\u2026";
 }
 
-const CHECKS = ["novelty", "resource", "feasibility", "alignment"] as const;
-type CheckKey = typeof CHECKS[number];
-
-const CHECK_LABELS: Record<CheckKey, string> = {
-  novelty: "Novelty",
-  resource: "Resource",
-  feasibility: "Feasibility",
-  alignment: "Alignment",
+const TIER_COLORS: Record<string, string> = {
+  STRONG: "#4ec9b0",
+  ADEQUATE: "#569cd6",
+  WEAK: "#ce9178",
+  FAIL: "#f44747",
 };
+const TIER_LETTERS: Record<string, string> = { STRONG: "S", ADEQUATE: "A", WEAK: "W", FAIL: "F" };
 
-function auditPassed(audit: AuditResult, k: CheckKey): boolean {
-  return { novelty: audit.novelty, resource: audit.resource, feasibility: audit.feasibility, alignment: audit.alignment }[k];
+function tierCounts(audit: AuditResult): Record<string, number> {
+  const c: Record<string, number> = { STRONG: 0, ADEQUATE: 0, WEAK: 0, FAIL: 0 };
+  for (const r of audit.results) {
+    const t = r.tier.toUpperCase();
+    if (t in c) c[t]++;
+  }
+  return c;
+}
+
+function auditSummary(audit: AuditResult): string {
+  const c = tierCounts(audit);
+  return `${c.STRONG}S ${c.ADEQUATE}A ${c.WEAK}W ${c.FAIL}F`;
 }
 
 // ── NodeDetail ────────────────────────────────────────────────────────────────
@@ -235,7 +252,7 @@ function NodeDetail({ node, theme }: { node: TreeNode; theme: ReturnType<typeof 
 
       {node.dead && (
         <Callout tone="warning" title="Pruned">
-          This node failed a hard-threshold check (Resource or Novelty) and was removed from further expansion.
+          This node failed an axiomatic check or scored below the prune threshold.
         </Callout>
       )}
 
@@ -251,15 +268,18 @@ function NodeDetail({ node, theme }: { node: TreeNode; theme: ReturnType<typeof 
       {node.audit ? (
         <>
           <Divider />
-          <H3>QCM Audit</H3>
+          <H3>Tiered QCM Audit — {auditSummary(node.audit)}</H3>
           <Table
-            headers={["Check", "Result", "Reason"]}
-            rows={CHECKS.map(k => [
-              CHECK_LABELS[k],
-              auditPassed(node.audit!, k) ? "PASS" : "FAIL",
-              node.audit!.reasons[k] ?? "\u2014",
+            headers={["Sub-Question", "Tier", "Reason"]}
+            rows={node.audit.results.map(r => [
+              r.key,
+              r.tier,
+              r.reason || "\u2014",
             ])}
-            rowTone={CHECKS.map(k => (auditPassed(node.audit!, k) ? "success" : "danger"))}
+            rowTone={node.audit.results.map(r => {
+              const t = r.tier.toUpperCase();
+              return t === "STRONG" || t === "ADEQUATE" ? "success" : "danger";
+            })}
           />
         </>
       ) : (
@@ -373,7 +393,7 @@ export default function MCTSTreeExplorer() {
                       gap: 5,
                     }}
                   >
-                    {/* Idea text — pre-truncated, height-clipped */}
+                    {/* Idea text */}
                     <div
                       style={{
                         fontSize: 10,
@@ -387,7 +407,7 @@ export default function MCTSTreeExplorer() {
                     >
                       {trunc(node.idea, isRoot ? 85 : 120)}
                     </div>
-                    {/* Bottom row: check badges + score */}
+                    {/* Bottom row: tier badges + score */}
                     <div
                       style={{
                         display: "flex",
@@ -397,25 +417,21 @@ export default function MCTSTreeExplorer() {
                       }}
                     >
                       {node.audit
-                        ? CHECKS.map(k => (
+                        ? Object.entries(tierCounts(node.audit)).map(([tier, count]) => (
                             <span
-                              key={k}
-                              title={`${CHECK_LABELS[k]}: ${auditPassed(node.audit!, k) ? "PASS" : "FAIL"}`}
+                              key={tier}
+                              title={`${tier}: ${count}`}
                               style={{
                                 fontSize: 9,
                                 padding: "1px 3px",
                                 borderRadius: 3,
-                                background: auditPassed(node.audit!, k)
-                                  ? theme.diff.insertedLine
-                                  : theme.diff.removedLine,
-                                color: auditPassed(node.audit!, k)
-                                  ? theme.diff.stripAdded
-                                  : theme.diff.stripRemoved,
+                                background: `${TIER_COLORS[tier]}22`,
+                                color: TIER_COLORS[tier],
                                 fontWeight: 700,
                                 letterSpacing: 0.3,
                               }}
                             >
-                              {k[0].toUpperCase()}
+                              {count}{TIER_LETTERS[tier]}
                             </span>
                           ))
                         : null}
@@ -498,14 +514,14 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 :root {
   --bg:#1e1e1e;--bg-c:#252526;--bg-s:#2d2d2d;--tx:#d4d4d4;--tx2:#9d9d9d;
   --tx3:#6e6e6e;--st:#3e3e3e;--st2:#4a4a4a;--ac:#569cd6;
-  --ok:#4ec9b0;--warn:#ce9178;--err:#f44747;
-  --ok-bg:rgba(78,201,176,.15);--err-bg:rgba(244,71,71,.15);--warn-bg:rgba(206,145,120,.12);
+  --ok:#4ec9b0;--warn:#ce9178;--err:#f44747;--info:#569cd6;
+  --ok-bg:rgba(78,201,176,.15);--err-bg:rgba(244,71,71,.15);--warn-bg:rgba(206,145,120,.12);--info-bg:rgba(86,156,214,.12);
 }
 @media(prefers-color-scheme:light){:root{
   --bg:#fff;--bg-c:#f3f3f3;--bg-s:#e8e8e8;--tx:#1e1e1e;--tx2:#616161;
   --tx3:#9e9e9e;--st:#e0e0e0;--st2:#d0d0d0;--ac:#0066b8;
-  --ok:#0a7c3e;--warn:#795e26;--err:#a31515;
-  --ok-bg:rgba(10,124,62,.1);--err-bg:rgba(163,21,21,.1);--warn-bg:rgba(121,94,38,.1);
+  --ok:#0a7c3e;--warn:#795e26;--err:#a31515;--info:#0066b8;
+  --ok-bg:rgba(10,124,62,.1);--err-bg:rgba(163,21,21,.1);--warn-bg:rgba(121,94,38,.1);--info-bg:rgba(0,102,184,.1);
 }}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--tx);height:100vh;overflow:hidden;display:flex;flex-direction:column}
@@ -525,7 +541,10 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
 .ni.root{font-style:italic}.ni.dead{text-decoration:line-through;color:var(--tx3)}
 .nb-row{display:flex;gap:3px;align-items:center;margin-top:auto}
 .badge{font-size:9px;padding:1px 3px;border-radius:3px;font-weight:700;letter-spacing:.3px}
-.badge.ok{background:var(--ok-bg);color:var(--ok)}.badge.err{background:var(--err-bg);color:var(--err)}
+.badge.s{background:var(--ok-bg);color:var(--ok)}
+.badge.a{background:var(--info-bg);color:var(--info)}
+.badge.w{background:var(--warn-bg);color:var(--warn)}
+.badge.f{background:var(--err-bg);color:var(--err)}
 .nscore{margin-left:auto;font-size:10px;color:var(--tx2);font-weight:600}
 .npruned{font-size:9px;color:var(--tx3);margin-left:3px}
 #detail h3{font-size:13px;font-weight:600;margin:12px 0 6px}
@@ -541,8 +560,10 @@ hr{border:none;border-top:1px solid var(--st);margin:12px 0}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{text-align:left;font-size:11px;color:var(--tx2);padding:4px 6px;border-bottom:1px solid var(--st)}
 td{padding:5px 6px;vertical-align:top;border-bottom:1px solid var(--st)}
-tr.ok td:nth-child(2){color:var(--ok);font-weight:600}
-tr.err td:nth-child(2){color:var(--err);font-weight:600}
+tr.tier-s td:nth-child(2){color:var(--ok);font-weight:600}
+tr.tier-a td:nth-child(2){color:var(--info);font-weight:600}
+tr.tier-w td:nth-child(2){color:var(--warn);font-weight:600}
+tr.tier-f td:nth-child(2){color:var(--err);font-weight:600}
 .dmeta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 .ml{font-size:11px;color:var(--tx2)}.mv{font-size:12px;font-weight:600}
 .ph{color:var(--tx3);font-size:12px}
@@ -580,8 +601,21 @@ const W=maxX+PAD,H=maxY+PAD;
 const NS='http://www.w3.org/2000/svg';
 function se(tag,a={}){const e=document.createElementNS(NS,tag);for(const[k,v]of Object.entries(a))e.setAttribute(k,v);return e}
 function trunc(s,n){s=s.replace(/\s+/g,' ').trim();return s.length<=n?s:s.slice(0,n-1)+'\u2026'}
-const CK=['novelty','resource','feasibility','alignment'];
-const CL={novelty:'Novelty',resource:'Resource',feasibility:'Feasibility',alignment:'Alignment'};
+
+const TIERS=['STRONG','ADEQUATE','WEAK','FAIL'];
+const TIER_L={STRONG:'S',ADEQUATE:'A',WEAK:'W',FAIL:'F'};
+const TIER_CLS={STRONG:'s',ADEQUATE:'a',WEAK:'w',FAIL:'f'};
+
+function tierCounts(audit){
+  const c={STRONG:0,ADEQUATE:0,WEAK:0,FAIL:0};
+  if(audit&&audit.results){for(const r of audit.results){const t=r.tier.toUpperCase();if(t in c)c[t]++}}
+  return c;
+}
+function auditSummary(audit){
+  const c=tierCounts(audit);
+  return c.STRONG+'S '+c.ADEQUATE+'A '+c.WEAK+'W '+c.FAIL+'F';
+}
+
 let sel=DID;
 function render(){
   const svg=document.getElementById('svg');
@@ -606,7 +640,18 @@ function render(){
     nd.textContent=trunc(n.idea,ir?85:120);
     box.appendChild(nd);
     const row=document.createElement('div');row.className='nb-row';
-    if(n.audit){for(const k of CK){const b=document.createElement('span');b.className='badge '+(n.audit[k]?'ok':'err');b.title=`${CL[k]}: ${n.audit[k]?'PASS':'FAIL'}`;b.textContent=k[0].toUpperCase();row.appendChild(b)}}
+    if(n.audit&&n.audit.results){
+      const c=tierCounts(n.audit);
+      for(const t of TIERS){
+        if(c[t]>0){
+          const b=document.createElement('span');
+          b.className='badge '+TIER_CLS[t];
+          b.title=`${t}: ${c[t]}`;
+          b.textContent=c[t]+TIER_L[t];
+          row.appendChild(b);
+        }
+      }
+    }
     const sc=document.createElement('span');sc.className='nscore';sc.textContent=Math.round(n.mean_value*100)+'%';row.appendChild(sc);
     if(n.dead){const pr=document.createElement('span');pr.className='npruned';pr.textContent='pruned';row.appendChild(pr)}
     box.appendChild(row);
@@ -621,26 +666,28 @@ function showDetail(n){
   ds.innerHTML=`<div><div class="dsv">${n.visits}</div><div class="dsl">Visits</div></div>`+
     `<div><div class="dsv ${sc>=75?'ok':sc<50?'err':''}">${sc}%</div><div class="dsl">Mean score</div></div>`;
   d.appendChild(ds);
-  if(n.dead){const c=document.createElement('div');c.className='callout warn';c.innerHTML='<div class="ct">Pruned</div>Failed a hard-threshold check and removed from further expansion.';d.appendChild(c)}
+  if(n.dead){const c=document.createElement('div');c.className='callout warn';c.innerHTML='<div class="ct">Pruned</div>Failed an axiomatic check or scored below the prune threshold.';d.appendChild(c)}
   if(BP.has(n.id)&&n.depth>0){const c=document.createElement('div');c.className='callout ok';c.innerHTML='<div class="ct">On the best path</div>Lies on the greedy best path from root to leaf.';d.appendChild(c)}
   const h=document.createElement('h3');h.textContent='Idea';d.appendChild(h);
   const p=document.createElement('p');p.className='didea';p.textContent=n.idea;d.appendChild(p);
-  if(n.audit){
+  if(n.audit&&n.audit.results&&n.audit.results.length>0){
     d.appendChild(document.createElement('hr'));
-    const ah=document.createElement('h3');ah.textContent='QCM Audit';d.appendChild(ah);
+    const ah=document.createElement('h3');ah.textContent='Tiered QCM Audit \u2014 '+auditSummary(n.audit);d.appendChild(ah);
     const tbl=document.createElement('table');
-    tbl.innerHTML='<thead><tr><th>Check</th><th>Result</th><th>Reason</th></tr></thead>';
+    tbl.innerHTML='<thead><tr><th>Sub-Question</th><th>Tier</th><th>Reason</th></tr></thead>';
     const tb=document.createElement('tbody');
-    for(const k of CK){
-      const pass=n.audit[k];const tr=document.createElement('tr');tr.className=pass?'ok':'err';
-      const reason=(n.audit.reasons&&n.audit.reasons[k])||'\u2014';
-      tr.innerHTML=`<td>${CL[k]}</td><td>${pass?'PASS':'FAIL'}</td><td>${reason}</td>`;
+    for(const r of n.audit.results){
+      const tr=document.createElement('tr');
+      const t=r.tier.toUpperCase();
+      tr.className='tier-'+TIER_CLS[t]||'f';
+      const reason=r.reason||'\u2014';
+      tr.innerHTML=`<td>${r.key}</td><td>${t}</td><td>${reason}</td>`;
       tb.appendChild(tr);
     }
     tbl.appendChild(tb);d.appendChild(tbl);
-  }else{
+  }else if(n.depth===0){
     const p2=document.createElement('p');p2.style.cssText='color:var(--tx3);font-size:12px;font-style:italic;margin-top:8px';
-    p2.textContent='Root node — no QCM audit (this is the problem statement).';d.appendChild(p2);
+    p2.textContent='Root node \u2014 no QCM audit (this is the problem statement).';d.appendChild(p2);
   }
   d.appendChild(document.createElement('hr'));
   const m=document.createElement('div');m.className='dmeta';
